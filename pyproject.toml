@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pero"
+version = "0.13.0"
+description = "pero - 独立 Agent 后端与分层记忆"
+readme = "README.md"
+requires-python = ">=3.10"
+# 版本按本机实际解析结果锁定，不使用无依据的“最新版本”字样。
+dependencies = [
+  "fastapi==0.162.5",
+  "uvicorn==0.54.0",
+  "httpx==0.28.1",
+  "websockets==16.1.1",
+  "pypdf==7.1.1",
+]
+
+[project.scripts]
+pero = "pero.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["pero*"]

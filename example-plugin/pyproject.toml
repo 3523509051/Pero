@@ -1,0 +1,6 @@
+[project]
+name = "pero-example-note"
+version = "0.1.0"
+description = "Pero 插件 SDK v1 本地验收样板"
+requires-python = ">=3.10"
+dependencies = []

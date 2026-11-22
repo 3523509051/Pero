@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "example.note",
+  "name": "示例笔记理解",
+  "description": "本地验收用示例插件：把一段文字整理成有界摘要，并生成一张真实图片产物。",
+  "version": "0.1.0",
+  "sdk_version": "1",
+  "entrypoint": "plugin_adapter:register",
+  "license": "MIT",
+  "tools": ["note_digest"],
+  "capabilities": ["cache.private", "artifact.image", "events.emit"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "max_chars": {"type": "integer", "minimum": 50, "maximum": 1200, "default": 400},
+      "include_image": {"type": "boolean", "default": true}
+    },
+    "additionalProperties": false
+  }
+}

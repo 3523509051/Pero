@@ -1,0 +1,251 @@
+{
+  "_说明": "空白运行配置模板（P14）。复制为 config/runtime.json 后填入实际值；本文件不含真实账号/群号/Key，不覆盖 default.json。占位符 <...> 必须全部替换，未用到的能力保持 enabled=false。凭据只经环境变量注入，任何真实值不得写入本文件或入库。",
+  "service": {
+    "host": "127.0.0.1",
+    "port": 8765,
+    "log_level": "info"
+  },
+  "phase": "P13",
+  "provider": {
+    "provider_id": "deepseek",
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "PERO_DEEPSEEK_API_KEY",
+    "request_timeout_seconds": 60.0
+  },
+  "thinking": {
+    "model": "deepseek-flash",
+    "protocol": "chat.completions"
+  },
+  "runtime": {
+    "max_model_calls": 4,
+    "max_tool_calls": 8,
+    "tool_timeout_seconds": 10.0,
+    "max_history_messages": 240,
+    "max_user_chars": 4000,
+    "max_tool_result_chars": 4000
+  },
+  "memory": {
+    "root": "data",
+    "database": "pero.sqlite3",
+    "load_turn_limit": 8,
+    "load_char_budget": 4000,
+    "load_tool_evidence_per_turn": 4,
+    "detail_max_chars": 1000,
+    "preview_chars": 80,
+    "record_default_limit": 20,
+    "record_max_limit": 100,
+    "save_max_chars": 400,
+    "journal_summary_chars": 160,
+    "retrieval_limit": 5,
+    "retrieval_item_chars": 200,
+    "retrieval_total_chars": 1200,
+    "_说明_l3": "L3 人物事实：默认关闭；开启后仅在显式保存路径整理来源可核对的明确陈述/偏好",
+    "l3_enabled": false,
+    "l3_max_facts_per_turn": 3,
+    "l3_extract_max_chars": 800,
+    "_说明_l2": "L2 独立交互记忆：未归档交互达到 chat_l2_trigger 条时归档最旧的 trigger-retain 条，至少保留 chat_l2_retain 条（用户与已确认送达的助手各计 1 条）",
+    "chat_l1_messages": 10,
+    "chat_l10_messages": 20,
+    "chat_l2_trigger": 80,
+    "chat_l2_retain": 30,
+    "chat_l2_char_budget": 16000
+  },
+  "embeddings": {
+    "_说明": "语义/向量检索：默认关闭；启用必须显式配置 base_url 与实际模型名（不猜模型），按官方 /embeddings 协议调用；不可用时明确降级关键词检索",
+    "enabled": false,
+    "base_url": "",
+    "api_key_env": "PERO_EMBEDDING_API_KEY",
+    "model": "",
+    "dimension": 1024,
+    "timeout_seconds": 20.0,
+    "max_candidates": 8,
+    "index_batch_size": 8,
+    "index_max_chars": 1000
+  },
+  "events": {
+    "_说明": "SSE 事件流：每订阅有界队列，慢客户端丢弃不阻塞主链路",
+    "queue_max": 64,
+    "buffer_limit": 256,
+    "heartbeat_seconds": 15.0,
+    "payload_max_chars": 500
+  },
+  "channels": {
+    "onebot11": {
+      "_说明": "Pero 独立 WS 端口（默认 6200，不与 webot 旧 6199 冲突）；桥侧需把上报地址改为本端口并由 Pero 作为服务端接收连接",
+      "enabled": false,
+      "host": "127.0.0.1",
+      "port": 6200,
+      "path": "/ws",
+      "token_env": "PERO_ONEBOT_TOKEN",
+      "max_frame_bytes": 33554432,
+      "dedupe_max_entries": 2000,
+      "dedupe_ttl_seconds": 600.0,
+      "action_timeout_seconds": 10.0,
+      "heartbeat_timeout_seconds": 90.0
+    }
+  },
+  "orchestration": {
+    "_说明": "自动处理/自动发送默认关闭；allowed_conversations 与 routes 必须同时满足（空 allowed = 全拒）。账号/目标都是桥数字 ID（crc32(wxid)%1e9），routes 的 (account,conversation_type,target) 只允许指向一个 Agent",
+    "auto_process_enabled": false,
+    "auto_send_enabled": false,
+    "allowed_conversations": ["onebot11:<桥数字账号>:group:<桥数字群ID>"],
+    "allow_private": false,
+    "wake_words": ["Pero"],
+    "wake_match": "contains",
+    "at_is_trusted_mention": false,
+    "window_after_wake_seconds": 30.0,
+    "window_idle_seconds": 30.0,
+    "window_max_seconds": 120.0,
+    "max_active_conversations": 3,
+    "merge_quiet_seconds": 5.0,
+    "merge_max_seconds": 30.0,
+    "merge_max_messages": 10,
+    "merge_max_chars": 4000,
+    "queue_max_per_conversation": 32,
+    "max_conversations": 32,
+    "worker_idle_seconds": 60.0,
+    "maintenance_interval_seconds": 30.0,
+    "candidate_max": 20,
+    "candidate_ttl_seconds": 600.0,
+    "send_accounts": ["<桥数字账号>"],
+    "send_targets": ["<桥数字群ID>"],
+    "routes": [
+      {
+        "account": "<桥数字账号>",
+        "conversation_type": "group",
+        "target": "<桥数字群ID>",
+        "agent_id": "default"
+      }
+    ]
+  },
+  "conversation": {
+    "background_enabled": true,
+    "background_max_turns": 10,
+    "background_max_chars": 2000,
+    "background_idle_seconds": 600.0,
+    "background_max_conversations": 32,
+    "_说明_l10": "L10 深缓冲：默认关闭；承接 L1 溢出，进程内存重启即空，按预算选用",
+    "l10_enabled": false,
+    "l10_max_turns": 60,
+    "l10_max_chars": 8000,
+    "l10_idle_seconds": 3600.0,
+    "l10_max_conversations": 64,
+    "l10_budget_chars": 1200,
+    "preflight_enabled": false,
+    "preflight_timeout_seconds": 6.0,
+    "pass_marker": "[PASS]",
+    "bare_at_context_chars": 120,
+    "auxiliary_calls_per_turn": 2
+  },
+  "web": {
+    "enabled": false,
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "PERO_DEEPSEEK_API_KEY",
+    "search_daily_limit": 50,
+    "website_daily_limit": 300,
+    "search_count": 3,
+    "content_chars": 1800,
+    "max_response_bytes": 524288,
+    "timeout_seconds": 8.0
+  },
+  "files": {
+    "_说明": "max_bytes 默认 100 MiB；max_total_bytes/max_total_turn_bytes 为 null 表示不设项目配额；provider_limits 只是供应商能力参考，不在本地提前拒绝",
+    "enabled": false,
+    "accept_uploads": false,
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "PERO_DEEPSEEK_API_KEY",
+    "max_bytes": 104857600,
+    "max_total_bytes": null,
+    "max_files_per_turn": 20,
+    "max_total_turn_bytes": null,
+    "expires_seconds": 86400,
+    "timeout_seconds": 600.0,
+    "history_reply_chars": 800,
+    "chunk_bytes": 1048576,
+    "provider_limits": {
+      "document_bytes": 104857600,
+      "plain_bytes": 33554432,
+      "documents_per_request": 20,
+      "text_bytes_per_request": 8388608,
+      "document_pages": 1000
+    },
+    "default_purpose": "user_data"
+  },
+  "images": {
+    "enabled": false,
+    "accept_inline": false,
+    "accept_uploads": false,
+    "max_bytes": 10000000,
+    "max_per_turn": 10,
+    "max_total_bytes": 20000000,
+    "ingress_max_items": 8,
+    "ingress_max_bytes": 32000000,
+    "selection_max_candidates": 5,
+    "selection_timeout_seconds": 8.0,
+    "carry_seconds": 30.0,
+    "carry_max_entries": 256,
+    "recent_seconds": 300.0
+  },
+  "archive": {
+    "enabled": false,
+    "trigger_turns": 12,
+    "trigger_chars": 12000,
+    "retain_turns": 4,
+    "max_turns": 16,
+    "max_input_chars": 16000,
+    "summary_chars": 800,
+    "max_output_tokens": 1500,
+    "max_pending": 32,
+    "scan_limit": 32,
+    "interval_seconds": 60.0,
+    "timeout_seconds": 90.0
+  },
+  "amap": {
+    "enabled": false,
+    "api_key_env": "PERO_AMAP_API_KEY",
+    "daily_limit": 100,
+    "timeout_seconds": 15.0,
+    "max_response_bytes": 524288,
+    "places_limit": 5,
+    "weather_fast_enabled": false,
+    "weather_fast_timeout_seconds": 10.0,
+    "weather_data_chars": 1200
+  },
+  "stickers": {
+    "enabled": false,
+    "auto_send_enabled": false,
+    "media_action": "pero_media_send_v1",
+    "max_image_bytes": 10000000,
+    "saves_per_turn": 1,
+    "list_limit": 100,
+    "fallback_reply_text": "好嘞，给你配一个{name}表情。",
+    "media_timeout_seconds": 90.0
+  },
+  "bridge_context": {
+    "_说明": "桥扩展：事件 pero_ext 默认随消息生效无需开关；以下三项控制只读字节查询（文件补传/引用原图），均默认关闭",
+    "enabled": false,
+    "file_fetch_enabled": false,
+    "quote_image_fetch_enabled": false,
+    "file_query_action": "pero_file_bytes_v1",
+    "file_chunk_action": "pero_file_chunk_v1",
+    "quote_image_action": "pero_quote_image_v1",
+    "queue_max": 8,
+    "fetch_timeout_seconds": 120.0,
+    "max_file_bytes": 104857600,
+    "chunk_bytes": 1048576
+  },
+  "agents": [
+    {
+      "agent_id": "default",
+      "display_name": "Pero",
+      "description": "按需修改描述与人格（persona 字段可加在 agent 上，稳定 SYSTEM，不写历史/SQLite）",
+      "composition": {
+        "model_provider": "deepseek.chat_completions",
+        "channel": "channel.onebot11",
+        "memory_repository": "memory.sqlite",
+        "retriever": "retriever.sqlite_keyword",
+        "conversation_policy": "policy.window_text"
+      }
+    }
+  ]
+}
