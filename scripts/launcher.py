@@ -1,4 +1,4 @@
-"""Windows source-checkout launcher. No package installs or bridge operations."""
+"""Windows source-checkout launcher, optionally managing the webot bridge."""
 from __future__ import annotations
 import argparse
 import json
@@ -59,8 +59,11 @@ def load_state(state_dir):
 
 def management_token(state_dir,*,create=False):
     override=os.environ.get('PERO_MANAGEMENT_TOKEN','').strip()
+    return protected_token(state_dir/'management-token.dpapi',override,create=create)
+
+
+def protected_token(path,override='',*,create=False):
     from pero.manager.vault import DPAPI,VaultError
-    path=state_dir/'management-token.dpapi'
     try:
         if override and create:
             atomic_write(path,DPAPI.transform(override.encode('utf-8')))
@@ -159,6 +162,18 @@ def start(args,state_dir):
     try:
         config,settings=check(args)
         available(settings.service.host,settings.service.port);available('127.0.0.1',args.manager_port)
+        pairing=None
+        if args.with_webot or args.webot_root:
+            available('127.0.0.1',settings.channels.onebot11.port)
+            from wechat_pairing import prepare
+            webot=args.webot_root or ROOT.parent/'webot'
+            try:
+                pairing=prepare(ROOT,webot,config,state_dir,args.agent_id)
+                from pero.core.settings import load_settings
+                settings=load_settings(config)
+            except LauncherError:raise
+            except Exception as exc:raise LauncherError('微信组合配置失败（'+type(exc).__name__+'）；未启动微信。请检查扫描、账号与配置。') from None
+        available(settings.service.host,settings.service.port);available('127.0.0.1',args.manager_port)
         if settings.channels.onebot11.enabled:available(settings.channels.onebot11.host,settings.channels.onebot11.port)
         token=management_token(state_dir,create=True)
         from windows_job import WindowsJob
@@ -171,12 +186,15 @@ def start(args,state_dir):
         manager_url=f'http://127.0.0.1:{args.manager_port}'
         log_dir=ROOT/'logs'/'launcher'/run_id
         env=dict(os.environ,PERO_MANAGEMENT_TOKEN=token,PERO_MANAGER_URL=manager_url,PYTHONIOENCODING='utf-8',PYTHONUNBUFFERED='1')
+        if pairing:
+            env[pairing['token_env']]=protected_token(state_dir/'onebot-token.dpapi',create=True)
         env['PYTHONPATH']=str(ROOT/'src')+(os.pathsep+env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
         children=[]
         for component in ('core','manager'):
             command=[sys.executable,str(ROOT/'scripts/launch_child.py'),component,'--config',str(config),
                      '--manager-port',str(args.manager_port),'--core-url',core_url,'--manager-state',str(args.manager_state_dir.resolve()),
                      '--stop-file',str(run_dir/'stop'),'--log',str(log_dir/(component+'.log'))]
+            if pairing and component=='manager':command+=['--scope-labels',str(pairing['labels'])]
             children.append(job.spawn(command,cwd=ROOT,env=env))
         state={'run_id':run_id,'pid':os.getpid(),'core_pid':children[0].pid,'manager_pid':children[1].pid,
                'config':str(config),'core_url':core_url,'manager_url':manager_url,'logs':str(log_dir)}
@@ -187,6 +205,32 @@ def start(args,state_dir):
             if health_check(core_url,'/health','pero') and health_check(manager_url,'/manage/v1/health','pero-manager'):break
             time.sleep(0.3)
         else:raise LauncherError('启动健康检查超时，请检查日志：'+str(log_dir))
+        if pairing:
+            # Apply saved per-group switches before the bridge can produce events.
+            deadline=time.monotonic()+args.start_timeout
+            while time.monotonic()<deadline:
+                if any(child.poll() is not None for child in children):raise LauncherError('服务在桥接前退出，请检查日志。')
+                try:
+                    applied=request(manager_url,'/manage/v1/config/state',token=token)
+                    if applied.get('state')=='applied':break
+                except Exception:pass
+                time.sleep(0.3)
+            else:raise LauncherError('已保存群设置尚未应用，未启动桥；请查看控制室配置同步日志。')
+            command=[str(pairing['python']),str(pairing['webot_root']/'bridge/run_managed.py'),
+                     '--stop-file',str(run_dir/'stop'),'--log',str(log_dir/'bridge.log')]
+            bridge_env={key:value for key,value in env.items() if key not in ('PYTHONPATH',)}
+            children.append(job.spawn(command,cwd=pairing['webot_root']/'bridge',env=bridge_env))
+            state['bridge_pid']=children[-1].pid
+            atomic_write(state_dir/'session.json',json.dumps(state,ensure_ascii=False,indent=2).encode('utf-8'))
+            deadline=time.monotonic()+args.start_timeout
+            while time.monotonic()<deadline:
+                if any(child.poll() is not None for child in children):raise LauncherError('桥启动失败，请检查 bridge.log；请手动启动并登录微信。')
+                try:
+                    if any(item.get('connected') for item in request(core_url,'/api/v1/channels').get('channels',[])):break
+                except Exception:pass
+                time.sleep(0.3)
+            else:raise LauncherError('桥未连接，请核对微信、webot 依赖和 bridge.log。')
+            print('微信桥已连接；微信客户端由你手动启动和登录。',flush=True)
         print('Pero 已启动。\n控制室：'+manager_url+'\n日志：'+str(log_dir)+'\n运行 login-code.cmd 查看管理访问码。\n请保留本窗口；用 stop.cmd 或 Ctrl+C 请求收尾停止。',flush=True)
         if os.environ.get('PERO_MANAGEMENT_TOKEN'):print('本次沿用环境变量中的管理访问码。',flush=True)
         if not args.no_browser:webbrowser.open(manager_url)
@@ -228,6 +272,9 @@ def main(argv=None):
     parser.add_argument('--start-timeout',type=float,default=60)
     parser.add_argument('--stop-timeout',type=float,default=120)
     parser.add_argument('--no-browser',action='store_true')
+    parser.add_argument('--with-webot',action='store_true',help='扫描已登录微信的全部群，配置并启动桥；不会启动微信客户端')
+    parser.add_argument('--webot-root',type=Path,help='webot 仓库路径；默认使用并列 webot 目录，并启用组合启动')
+    parser.add_argument('--agent-id',default='',help='新增群绑定的 Agent，默认配置中的首个 Agent；已有绑定保持不变')
     args=parser.parse_args(argv)
     if sys.platform!='win32':raise LauncherError('此启动脚本用于 Windows；其它平台请使用 README 的手动启动入口。')
     state_dir=args.state_dir.expanduser().resolve()

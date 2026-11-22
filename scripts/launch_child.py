@@ -15,6 +15,7 @@ def main():
     parser.add_argument('--manager-state',required=True)
     parser.add_argument('--stop-file',type=Path,required=True)
     parser.add_argument('--log',type=Path,required=True)
+    parser.add_argument('--scope-labels',type=Path)
     args=parser.parse_args()
     args.log.parent.mkdir(parents=True,exist_ok=True)
     stream=args.log.open('a',encoding='utf-8',buffering=1)
@@ -33,7 +34,7 @@ def main():
         else:
             from pero.manager.app import create_manager_app
             from pero.manager.settings import ManagerSettings
-            app=create_manager_app(ManagerSettings(Path(args.config),core_url=args.core_url,state_dir=Path(args.manager_state)))
+            app=create_manager_app(ManagerSettings(Path(args.config),core_url=args.core_url,state_dir=Path(args.manager_state),labels_path=args.scope_labels))
             host,port='127.0.0.1',args.manager_port
         server=uvicorn.Server(uvicorn.Config(app,host=host,port=port,log_level=settings.service.log_level))
         async def run():

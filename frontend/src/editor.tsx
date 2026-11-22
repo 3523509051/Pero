@@ -2,7 +2,7 @@ import {newRequestId} from './request_id';
 import React,{useEffect,useRef,useState} from 'react';
 type Obj=Record<string,any>;
 type Field={key:string;label:string;type:'text'|'textarea'|'boolean'|'thinking'|'number'|'json'|'words'|'match'};
-export const wakeFields:Field[]=[{key:'wake_words',label:'唤醒词（每行一个，命中任意词即可）',type:'words'},{key:'wake_match',label:'匹配方式',type:'match'},{key:'at_is_trusted_mention',label:'允许 @ 唤醒',type:'boolean'}];
+export const wakeFields:Field[]=[{key:'group_enabled',label:'启用本群接入（关闭后停止处理本群消息，重扫群不会重新开启）',type:'boolean'},{key:'wake_words',label:'唤醒词（每行一个，命中任意词即可）',type:'words'},{key:'wake_match',label:'匹配方式',type:'match'},{key:'at_is_trusted_mention',label:'允许 @ 唤醒',type:'boolean'}];
 export const personaFields:Field[]=[{key:'prompt',label:'人格 Prompt',type:'textarea'}];
 export const toolFields:Field[]=[{key:'enabled',label:'启用工具',type:'boolean'},{key:'prompt',label:'工具 Prompt',type:'textarea'},{key:'analysis_enabled',label:'独立工具分析',type:'boolean'},{key:'thinking_mode',label:'独立工具思考',type:'thinking'},{key:'analysis_prompt',label:'分析 Prompt',type:'textarea'},{key:'model_profile',label:'分析模型配置',type:'text'},{key:'timeout_seconds',label:'超时（秒）',type:'number'},{key:'defaults',label:'默认参数（JSON 对象）',type:'json'}];
 export const modelFields:Field[]=[{key:'model',label:'模型名称',type:'text'},{key:'base_url',label:'API 地址',type:'text'},{key:'credential_ref',label:'凭据引用（API Key 页面中的编号）',type:'text'},{key:'reply_thinking',label:'普通回复思考',type:'boolean'}];

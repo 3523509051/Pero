@@ -81,10 +81,10 @@ def configuration_router(directory, store, sync, reader, vault):
 
     @router.get('/config/schema')
     async def schemas():
-        from pero.configuration.models import PersonaChanges,ToolChanges
+        from pero.configuration.models import PersonaChanges,ToolChanges,WakeChanges
         from pero.configuration.model_policy import ModelChanges,PolicyChanges
         return {'persona':PersonaChanges.model_json_schema(),'tool':ToolChanges.model_json_schema(),
-                'model':ModelChanges.model_json_schema(),'policy':PolicyChanges.model_json_schema(),
+                'model':ModelChanges.model_json_schema(),'policy':PolicyChanges.model_json_schema(),'wake':WakeChanges.model_json_schema(),
                 'save':SaveRequest.model_json_schema()}
 
     @router.get('/config/state')
@@ -119,6 +119,7 @@ def configuration_router(directory, store, sync, reader, vault):
         from pero.core.settings import load_settings
         settings=await asyncio.to_thread(load_settings,directory.config_path)
         defaults={k:getattr(settings.orchestration,k) for k in ('wake_words','wake_match','at_is_trusted_mention')}
+        defaults['group_enabled']=True
         result['defaults']=defaults
         result['desired_configuration']={**defaults,**result['value']}
         result['effective_configuration']=result['desired_configuration'] if result['application']['state']=='applied' else None

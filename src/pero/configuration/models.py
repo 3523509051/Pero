@@ -36,6 +36,7 @@ class SaveRequest(BaseModel):
 
 class WakeChanges(BaseModel):
     model_config=ConfigDict(extra='forbid',strict=True)
+    group_enabled: bool | None = None
     wake_words: list[str] | None = Field(default=None,max_length=100)
     wake_match: Literal['contains','prefix'] | None = None
     at_is_trusted_mention: bool | None = None

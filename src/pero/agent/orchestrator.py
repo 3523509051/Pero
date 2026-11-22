@@ -3314,6 +3314,10 @@ class Orchestrator:
         stickers: Optional[List[Dict[str, Any]]] = None,
     ) -> "DeliveryOutcome":
         orchestration = self._orchestration
+        if message.conversation_type=='group':
+            configuration=self._configuration_for(cid)
+            if configuration is not None and json.loads(configuration.wake_json).get('group_enabled') is False:
+                return DeliveryOutcome(status='failed',evidence='group_disabled')
         if message.conversation_type == 'private':
             fingerprint = self._private_access.fingerprint(message)
             if fingerprint is None or fingerprint != self._private_fingerprints.get(cid):
@@ -4021,6 +4025,10 @@ class Orchestrator:
             return None, 'private_not_authorized'
         if not private and cid not in orchestration.allowed_conversations:
             return None, "conversation_not_allowed"
+        if not private:
+            configuration=self._configuration_for(cid)
+            if configuration is not None and json.loads(configuration.wake_json).get('group_enabled') is False:
+                return None,'group_disabled'
         if message.conversation_type not in {"group", "private"}:
             return None, "conversation_type_unknown"
         if message.conversation_type != 'private':
@@ -4056,7 +4064,6 @@ class Orchestrator:
         if binding.memory is not None and not getattr(binding.memory, "available", False):
             # 已绑定存储但不可用：在入队前就拒绝，不占用队列与 worker。
             return None, "memory_unavailable"
-        import json
         binding.policy._wake_resolver=lambda cid:json.loads(self._configuration_for(cid).wake_json) if self._configuration_for(cid) else {}
         return (route, binding), None
 

@@ -1,6 +1,6 @@
-Source publication file list (2026-11-22)
+Source publication file list (2026-11-22; all-group combination update)
 Repository: pero
-Files: 218
+Files: 222
 
 .env.example
 .gitignore
@@ -37,7 +37,9 @@ docs/integration-contract.md
 docs/local-launcher.md
 docs/plugin-sdk-v1-general.md
 docs/pre-push-review-2026-11-22-2009.md
+docs/pre-push-review-2026-11-22-2151.md
 docs/project-engineering.md
+docs/wechat-combination.md
 example-plugin/LICENSE
 example-plugin/NOTICE.md
 example-plugin/README.md
@@ -78,6 +80,7 @@ requirements-lock.txt
 scripts/check_run.py
 scripts/launch_child.py
 scripts/launcher.py
+scripts/wechat_pairing.py
 scripts/windows_job.py
 src/pero/__init__.py
 src/pero/__main__.py
@@ -217,6 +220,7 @@ src/pero/tools/stickers.py
 src/pero/tools/validation.py
 src/pero/tools/web.py
 src/pero_plugin_sdk/__init__.py
+start-wechat.cmd
 start.cmd
 status.cmd
 stop.cmd
