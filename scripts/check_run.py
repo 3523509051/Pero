@@ -55,11 +55,15 @@ def main() -> int:
             f"[4] 前台启动 http://{settings.service.host}:{settings.service.port}"
             "（Ctrl+C 停止；不写任何后台自启）"
         )
+        from pero.core.logging_setup import configure
+
+        configure()
         uvicorn.run(
             app,
             host=settings.service.host,
             port=settings.service.port,
             log_level=settings.service.log_level,
+            log_config=None,
         )
     else:
         print("[4] 未启动服务（加 --serve 前台运行）")

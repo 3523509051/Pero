@@ -16,7 +16,8 @@ async function get(path:string){
   return unwrap(await resp.json());
 }
 
-function fmt(value:any){if(!value)return '';const d=new Date(value);return Number.isNaN(d.valueOf())?String(value):d.toLocaleString('zh-CN',{hour12:false})}
+import{fmtTime}from './time';
+function fmt(value:any){return fmtTime(value,'')}
 
 export function Bubble({item}:{item:Obj}){
   const mine=item.role==='assistant';

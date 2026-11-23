@@ -6,7 +6,8 @@ import './private_chat.css';
 type Obj=Record<string,any>;
 type Requester=(path:string,method?:string,body?:unknown)=>Promise<any>;
 const enc=encodeURIComponent;
-const date=(x:any)=>x?new Date(typeof x==='number'?x*1000:x).toLocaleString('zh-CN'): '—';
+import{fmtTime}from './time';
+const date=(x:any)=>fmtTime(x,'—');
 export default function PrivateChatManager({request}:{request:Requester}){
  const qc=useQueryClient(),[error,setError]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false),[code,setCode]=useState('');
  const [account,setAccount]=useState(''),[agent,setAgent]=useState(''),[label,setLabel]=useState(''),[hours,setHours]=useState(24);

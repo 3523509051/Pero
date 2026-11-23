@@ -36,9 +36,9 @@ class KnowledgeTool:
             return {'state':results['state'],'mode':results.get('mode'),'items':out,'returned':len(out),'truncated':len(out)<len(results.get('items',[]))}
         except KnowledgeError as e:return {'ok':False,'error_code':e.code}
 
-async def automatic_note(backend,agent_id,cid,text):
+async def automatic_note(backend,agent_id,cid,text,config=None):
     scope={'agent_id':agent_id,'conversation_id':cid}
-    cfg=await asyncio.to_thread(backend.get_config,**scope)
+    cfg=config if config is not None else await asyncio.to_thread(backend.get_config,**scope)
     if not cfg['enabled'] or not cfg['automatic_retrieval']:return '',None
     try:r=await backend.search_async(**scope,query=text,limit=cfg['top_k'])
     except Exception:return '[本群知识库检索失败；不要编造资料]',{'state':'failed','items':[]}
@@ -51,9 +51,13 @@ async def automatic_note(backend,agent_id,cid,text):
     return '\n'.join(lines),r
 
 def automatic_evidence(result):
-    if result is None:return []
+    # 未命中/失败/跳过都不产生"知识证据"：只有真正带回资料的检索才登记来源，
+    # 否则等于用一条无来源的记录暗示"查过并有结果"。
+    if not isinstance(result,dict) or result.get('state')!='ok':return []
+    items=result.get('items') or []
+    if not items:return []
     import uuid
-    from datetime import datetime,timezone
+    from pero.core.timebase import now_iso as _now_iso
     from pero.memory.models import ToolEvidenceInput
-    stamp=datetime.now(timezone.utc).isoformat();items=result.get('items',[])
+    stamp=_now_iso()
     return [ToolEvidenceInput(call_id='kb-auto-'+uuid.uuid4().hex,tool_name='search_knowledge',status='error' if result.get('state')=='failed' else 'ok',duration_ms=0,started_at=stamp,finished_at=stamp,summary=f"自动知识检索 {result.get('state')}，模式 {result.get('mode','unknown')}，命中 {len(items)} 项",resource_refs=tuple(str(x.get('doc_id'))+'/'+str(x.get('chunk_id')) for x in items[:10]))]

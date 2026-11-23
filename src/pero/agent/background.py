@@ -21,6 +21,15 @@ from pero.core.contracts import InboundMessage
 MAX_TEXT_CHARS = 160
 
 
+def _bj_stamp(timestamp: float, pattern: str) -> str:
+    """把时间戳渲染成北京时间文本（不用 `time.localtime` 依赖宿主机时区）。"""
+
+    from pero.core.timebase import to_beijing
+
+    moment = to_beijing(float(timestamp))
+    return moment.strftime(pattern) if moment is not None else "未知时间"
+
+
 @dataclass
 class BackgroundEntry:
     """一条短期背景事件；`text` 已截断，附件只有目录占位。"""
@@ -206,9 +215,7 @@ class ConversationBackground:
                 "event_id": e.event_id,
                 "sender_ref": e.sender_ref,
                 "display_name": e.display_name,
-                "occurred_at": time.strftime(
-                    "%Y-%m-%d %H:%M:%S", time.localtime(e.occurred_at)
-                ),
+                "occurred_at": _bj_stamp(e.occurred_at, "%Y-%m-%d %H:%M:%S"),
                 "preview": (e.text or e.attachment_note or "")[:80],
             }
             for e in fresh[-max(1, int(limit)):]
@@ -349,7 +356,7 @@ class DeepBackground:
                 continue
             name = entry.display_name[:24]
             body = entry.text or entry.attachment_note or "（无文字）"
-            occurred = time.strftime("%m-%d %H:%M", time.localtime(entry.occurred_at))
+            occurred = _bj_stamp(entry.occurred_at, "%m-%d %H:%M")
             line = f"- [{occurred}] {name}：{body}"
             if total + len(line) + 1 > max(int(budget_chars), 1):
                 break
@@ -401,9 +408,7 @@ class DeepBackground:
                 "event_id": e.event_id,
                 "sender_ref": e.sender_ref,
                 "display_name": e.display_name,
-                "occurred_at": time.strftime(
-                    "%Y-%m-%d %H:%M:%S", time.localtime(e.occurred_at)
-                ),
+                "occurred_at": _bj_stamp(e.occurred_at, "%Y-%m-%d %H:%M:%S"),
                 "preview": (e.text or e.attachment_note or "")[:80],
             }
             for e in fresh[-max(1, int(limit)):]

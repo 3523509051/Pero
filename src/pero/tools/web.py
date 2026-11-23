@@ -38,7 +38,9 @@ class WebQuota:
             if row and row[0] >= limit:
                 return False
             conn.execute("INSERT INTO quota VALUES(?,?,1) ON CONFLICT(day,kind) DO UPDATE SET used=used+1", (day,kind))
-            conn.execute("DELETE FROM quota WHERE day < ?", ((datetime.now(timezone.utc)-timedelta(days=32)).date().isoformat(),))
+            from pero.core.timebase import today as _bj_today
+
+            conn.execute("DELETE FROM quota WHERE day < ?", ((_bj_today()-timedelta(days=32)).isoformat(),))
         return True
 
 
@@ -130,8 +132,10 @@ class WebBackend:
                 results.append({"title":item["title"][:100],"url":item["url"][:500],
                     "summary":str(item.get("snippet") or "")[:180],
                     "date":str(item.get("date") or "")[:50]})
+            from pero.core.timebase import now_iso as _now_iso
+
             return {"ok":True,"backend":"deepseek_search","query":query,"results":results,
-                "retrieved_at":datetime.now(timezone.utc).isoformat(),"untrusted_data":True}
+                "retrieved_at":_now_iso(),"untrusted_data":True}
         url = await validate_public_url(str(arguments.get("url") or ""))
         route = route_reader(url)
         if route == "deepseek" and not await self._key(name):
@@ -152,7 +156,9 @@ class WebBackend:
                     "title":str(raw.get("title") or "")[:100],
                     "content":raw["content"] if self.settings.content_chars == 0 else raw["content"][:self.settings.content_chars],
                     "truncated":self.settings.content_chars > 0 and len(raw["content"])>self.settings.content_chars}
-        result["retrieved_at"] = datetime.now(timezone.utc).isoformat()
+        from pero.core.timebase import now_iso as _now_iso
+
+        result["retrieved_at"] = _now_iso()
         result["untrusted_data"] = True
         return result
 

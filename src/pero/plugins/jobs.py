@@ -5,7 +5,9 @@ from pathlib import Path
 from datetime import datetime,timezone
 from pero.plugins.errors import PluginError
 
-def now():return datetime.now(timezone.utc).isoformat()
+def now():
+    from pero.core.timebase import now_iso
+    return now_iso()
 
 class PluginJobs:
     def __init__(self,path:Path,events=None):

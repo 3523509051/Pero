@@ -18,7 +18,9 @@ from pero.core.contracts import ModelMessage
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    from pero.core.timebase import now_iso
+
+    return now_iso()
 
 
 @dataclass

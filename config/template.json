@@ -46,9 +46,9 @@
     "_说明_l2": "L2 独立交互记忆：未归档交互达到 chat_l2_trigger 条时归档最旧的 trigger-retain 条，至少保留 chat_l2_retain 条（用户与已确认送达的助手各计 1 条）",
     "chat_l1_messages": 10,
     "chat_l10_messages": 20,
-    "chat_l2_trigger": 80,
-    "chat_l2_retain": 30,
-    "chat_l2_char_budget": 16000
+    "chat_l2_trigger": 50,
+    "chat_l2_retain": 20,
+    "chat_l2_char_budget": 8000
   },
   "embeddings": {
     "_说明": "语义/向量检索：默认关闭；启用必须显式配置 base_url 与实际模型名（不猜模型），按官方 /embeddings 协议调用；不可用时明确降级关键词检索",

@@ -50,7 +50,9 @@ class ActivationCodeService:
         """创建新token，返回 {token_id, code (仅此一次), expires_at}。"""
         code, code_hash = self.generate_code()
         token_id = uuid.uuid4().hex
-        now = datetime.now(timezone.utc)
+        from pero.core.timebase import now as _bj_now
+
+        now = _bj_now()
         expires = now + timedelta(hours=hours_valid)
 
         with self._connect() as conn:
@@ -133,9 +135,14 @@ class ActivationCodeService:
                     conn.rollback()
                     return {"success": False, "error": "开通码已撤销"}
 
-                if datetime.fromisoformat(expires_at) < datetime.now(timezone.utc):
+                from pero.core import timebase
+
+                expires_stamp = timebase.to_beijing(expires_at)
+                if expires_stamp is None or expires_stamp < timebase.now():
                     conn.rollback()
                     return {"success": False, "error": "开通码已过期"}
+
+                now = timebase.now_iso()
 
                 # 2. 幂等检查：已被他人使用
                 if used_by and used_by != identity_id:
@@ -159,7 +166,6 @@ class ActivationCodeService:
                     # 恢复需要管理员明确操作或新的有效码
                 else:
                     grant_id = uuid.uuid4().hex
-                    now = datetime.now(timezone.utc).isoformat()
                     conn.execute(
                         """
                         INSERT INTO private_chat_grant
@@ -194,7 +200,7 @@ class ActivationCodeService:
                         SET used_by_identity=?, used_at=?
                         WHERE token_id=?
                     """,
-                        (identity_id, datetime.now(timezone.utc).isoformat(), token_id),
+                        (identity_id, now, token_id),
                     )
 
                 # 5. 尝试绑定主人 (首次成功者)
@@ -204,7 +210,6 @@ class ActivationCodeService:
 
                 is_owner = False
                 if not owner_exists:
-                    now = datetime.now(timezone.utc).isoformat()
                     try:
                         # Get display_name
                         display_row = conn.execute(
@@ -285,6 +290,8 @@ class ActivationCodeService:
 
     def revoke_token(self, token_id: str) -> bool:
         """撤销token（管理操作）。"""
+        from pero.core.timebase import now_iso
+
         with self._connect() as conn:
             conn.execute(
                 """
@@ -292,7 +299,7 @@ class ActivationCodeService:
                 SET revoked=1, revoked_at=?
                 WHERE token_id=?
             """,
-                (datetime.now(timezone.utc).isoformat(), token_id),
+                (now_iso(), token_id),
             )
             conn.commit()
         return True

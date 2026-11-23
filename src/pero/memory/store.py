@@ -37,6 +37,7 @@ from pero.memory.models import (
     LAYER_JOURNAL,
     LAYER_L2,
     LAYER_L20,
+    LAYER_L3,
     LAYER_L4,
     LAYER_RAW,
     RetrievalHit,
@@ -65,7 +66,7 @@ from pero.memory.models import (
 from pero.memory.schema import SCHEMA_VERSION, migrate
 from pero.memory.archive_store import ArchiveStoreMixin
 from pero.memory.chat_stream import ChatStreamMixin
-from pero.memory.p15_store import P15StoreMixin, MemoryQueryErrorP15
+from pero.memory.p15_store import FACT_ACTIVE, P15StoreMixin, MemoryQueryErrorP15
 
 
 class MemoryStoreError(RuntimeError):
@@ -93,7 +94,19 @@ def parse_conversation_id(conversation_id: str) -> Tuple[str, str, str, str]:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    """业务时间统一北京时间（aware，明确 +08:00）。"""
+
+    from pero.core.timebase import now_iso
+
+    return now_iso()
+
+
+def _require_epoch(value: Any, label: str) -> float:
+    """时间窗边界 → 绝对秒；解析失败直接报错（不静默改范围）。"""
+
+    from pero.core.timebase import require_epoch
+
+    return require_epoch(value, label)
 
 
 def _participant_clause(turn_ref: str) -> str:
@@ -125,6 +138,10 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
             self._conn.execute("PRAGMA synchronous=FULL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.execute("PRAGMA busy_timeout=5000")
+            # 时间筛选/排序统一走绝对时刻，避免旧 UTC 与 +08:00 混排导致漏召回。
+            from pero.core.timebase import register_sql
+
+            register_sql(self._conn)
             try:
                 self._schema_version = migrate(self._conn)
                 self._conn.commit()
@@ -1078,11 +1095,11 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
                 where.append("sender_identity_id=?")
                 params.append(identity_id)
             if since:
-                where.append("stored_at>=?")
-                params.append(since)
+                where.append("bj_epoch(stored_at)>=?")
+                params.append(_require_epoch(since, "since"))
             if until:
-                where.append("stored_at<?")
-                params.append(until)
+                where.append("bj_epoch(stored_at)<?")
+                params.append(_require_epoch(until, "until"))
             if keyword:
                 where.append("text LIKE ?")
                 params.append(f"%{keyword}%")
@@ -1094,7 +1111,7 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
                 " source_event_id"
                 " FROM raw_message WHERE "
                 + clause
-                + " ORDER BY created_at DESC, record_id DESC LIMIT ? OFFSET ?"
+                + " ORDER BY bj_epoch(created_at) DESC, record_id DESC LIMIT ? OFFSET ?"
             )
             count_sql = "SELECT COUNT(*) FROM raw_message WHERE " + clause
             with self._txn() as cur:
@@ -1115,11 +1132,11 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
                 where.append(_participant_clause("l2_turn.turn_id"))
                 params.append(identity_id)
             if since:
-                where.append("created_at>=?")
-                params.append(since)
+                where.append("bj_epoch(created_at)>=?")
+                params.append(_require_epoch(since, "since"))
             if until:
-                where.append("created_at<?")
-                params.append(until)
+                where.append("bj_epoch(created_at)<?")
+                params.append(_require_epoch(until, "until"))
             if keyword:
                 where.append("user_text LIKE ?")
                 params.append(f"%{keyword}%")
@@ -1132,7 +1149,7 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
                 " (assistant_text IS NOT NULL) AS has_assistant"
                 " FROM l2_turn WHERE "
                 + clause
-                + " ORDER BY created_at DESC, turn_id DESC LIMIT ? OFFSET ?"
+                + " ORDER BY bj_epoch(created_at) DESC, turn_id DESC LIMIT ? OFFSET ?"
             )
             count_sql = "SELECT COUNT(*) FROM l2_turn WHERE " + clause
             with self._txn() as cur:
@@ -1155,11 +1172,11 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
                 where.append(_participant_clause("t.turn_id"))
                 params.append(identity_id)
             if since:
-                where.append("e.created_at>=?")
-                params.append(since)
+                where.append("bj_epoch(e.created_at)>=?")
+                params.append(_require_epoch(since, "since"))
             if until:
-                where.append("e.created_at<?")
-                params.append(until)
+                where.append("bj_epoch(e.created_at)<?")
+                params.append(_require_epoch(until, "until"))
             if keyword:
                 where.append("e.summary LIKE ?")
                 params.append(f"%{keyword}%")
@@ -1173,7 +1190,7 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
                 + join
                 + " WHERE "
                 + clause
-                + " ORDER BY e.created_at DESC, e.evidence_id DESC LIMIT ? OFFSET ?"
+                + " ORDER BY bj_epoch(e.created_at) DESC, e.evidence_id DESC LIMIT ? OFFSET ?"
             )
             count_sql = (
                 "SELECT COUNT(*) FROM l20_tool_evidence e" + join + " WHERE " + clause
@@ -1230,7 +1247,7 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
                 " l.subject_identity_id AS identity_id, l.request_record_id"
                 " FROM l4_memory l WHERE "
                 + clause
-                + " ORDER BY created_at DESC, record_id DESC LIMIT ? OFFSET ?"
+                + " ORDER BY bj_epoch(created_at) DESC, record_id DESC LIMIT ? OFFSET ?"
             )
             count_sql = "SELECT COUNT(*) FROM l4_memory l WHERE " + clause
             with self._txn() as cur:
@@ -1251,11 +1268,11 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
                 where.append("j.participants_json LIKE ?")
                 params.append(f'%"{identity_id}"%')
             if since:
-                where.append("j.occurred_at>=?")
-                params.append(since)
+                where.append("bj_epoch(j.occurred_at)>=?")
+                params.append(_require_epoch(since, "since"))
             if until:
-                where.append("j.occurred_at<?")
-                params.append(until)
+                where.append("bj_epoch(j.occurred_at)<?")
+                params.append(_require_epoch(until, "until"))
             if keyword:
                 where.append("j.summary LIKE ?")
                 params.append(f"%{keyword}%")
@@ -1267,7 +1284,7 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
                 " length(j.summary) AS text_length, j.turn_id, j.has_assistant"
                 " FROM event_journal j WHERE "
                 + clause
-                + " ORDER BY created_at DESC, record_id DESC LIMIT ? OFFSET ?"
+                + " ORDER BY bj_epoch(created_at) DESC, record_id DESC LIMIT ? OFFSET ?"
             )
             count_sql = "SELECT COUNT(*) FROM event_journal j WHERE " + clause
             with self._txn() as cur:
@@ -1705,6 +1722,55 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
                         )
                     )
 
+            if LAYER_L3 in wanted:
+                # L3 人物事实：只回生效事实（撤回/替代/阻断的旧行不命中），
+                # 跨群不共享；身份过滤用事实主体，未解析出身份时按会话范围查。
+                clause, clause_params = like_clause("f.content", tokens)
+                sql = (
+                    "SELECT f.fact_id AS record_id, f.content AS text,"
+                    " f.occurred_at, f.display_name AS subject_label,"
+                    " f.source_record_ids, f.evidence_quote"
+                    " FROM l3_fact f WHERE f.agent_id=? AND f.status=?"
+                )
+                params = [agent_id, FACT_ACTIVE]
+                if conversation_id:
+                    sql += " AND f.conversation_id=?"
+                    params.append(conversation_id)
+                if identity_ids:
+                    marks = ",".join("?" for _ in identity_ids)
+                    sql += " AND f.identity_id IN (" + marks + ")"
+                    params.extend(identity_ids)
+                sql += (
+                    " AND " + clause
+                    + " ORDER BY bj_epoch(f.updated_at) DESC, f.fact_id DESC LIMIT ?"
+                )
+                params.extend(clause_params)
+                params.append(fetch)
+                for row in cur.execute(sql, params).fetchall():
+                    text = str(row["text"])
+                    try:
+                        refs = tuple(
+                            str(ref)
+                            for ref in json.loads(
+                                str(row["source_record_ids"]) or "[]"
+                            )[:3]
+                        )
+                    except (TypeError, ValueError):
+                        refs = ()
+                    hits.append(
+                        RetrievalHit(
+                            layer=LAYER_L3,
+                            record_id=str(row["record_id"]),
+                            occurred_at=str(row["occurred_at"] or ""),
+                            preview=(
+                                "[已归档事实｜系统整理，非用户明确保存] " + text
+                            )[:preview_limit],
+                            score=score(text, tokens),
+                            source_refs=refs,
+                            subject_label=row["subject_label"],
+                        )
+                    )
+
             if LAYER_JOURNAL in wanted:
                 clause, clause_params = like_clause("j.summary", tokens)
                 sql = (
@@ -1719,7 +1785,10 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
                 for identity_id in identity_ids:
                     sql += " AND j.participants_json LIKE ?"
                     params.append(f'%"{identity_id}"%')
-                sql += " AND " + clause + " ORDER BY j.occurred_at DESC LIMIT ?"
+                sql += (
+                    " AND " + clause
+                    + " ORDER BY bj_epoch(j.occurred_at) DESC, j.entry_id DESC LIMIT ?"
+                )
                 params.extend(clause_params)
                 params.append(fetch)
                 for row in cur.execute(sql, params).fetchall():
@@ -1761,7 +1830,10 @@ class SqliteMemoryStore(ChatStreamMixin, ArchiveStoreMixin, P15StoreMixin):
                         + ")"
                     )
                     params.extend(identity_ids)
-                sql += " AND " + clause + " ORDER BY m.stored_at DESC LIMIT ?"
+                sql += (
+                    " AND " + clause
+                    + " ORDER BY bj_epoch(m.stored_at) DESC, m.record_id DESC LIMIT ?"
+                )
                 params.extend(clause_params)
                 params.append(fetch)
                 for row in cur.execute(sql, params).fetchall():

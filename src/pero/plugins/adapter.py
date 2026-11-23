@@ -30,6 +30,14 @@ _STATUSES = frozenset({"complete", "partial", "unavailable", "failed"})
 _MAX_DATA_CHARS = 3000
 
 
+def _beijing_name() -> str:
+    """SDK 上下文时区：与宿主业务时间一致，不用进程默认。"""
+
+    from pero.core.timebase import BEIJING_NAME
+
+    return BEIJING_NAME
+
+
 @dataclass(frozen=True)
 class ToolBinding:
     spec: ToolSpec
@@ -170,6 +178,7 @@ class PluginToolAdapter:
             is_cancelled=getattr(context, "is_cancelled", lambda: False),
             channel_id=str(getattr(context, "channel_id", "") or ""),
             background_timeout=getattr(context,"background_timeout",None),
+            timezone=_beijing_name(),
         )
         images = getattr(context, "images", None)
         catalog = getattr(getattr(images, "backend", None), "catalog", None) or getattr(getattr(getattr(context,"files",None),"backend",None),"catalog",None)

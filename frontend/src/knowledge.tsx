@@ -7,7 +7,8 @@ type Request=(path:string,method?:string,body?:unknown)=>Promise<any>;
 
 function unwrap(body:any){return body&&typeof body==='object'&&'data' in body?body.data:body}
 async function get(path:string){const r=await fetch('/manage/v1'+path,{credentials:'same-origin'});if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d?.detail?.code||`HTTP ${r.status}`)}return unwrap(await r.json())}
-function fmt(v:any){if(!v)return '';const d=new Date(v);return Number.isNaN(d.valueOf())?String(v):d.toLocaleString('zh-CN',{hour12:false})}
+import{fmtTime}from './time';
+function fmt(v:any){return fmtTime(v,'')}
 
 function Docs({scope,request}:{scope:string,request:Request}){
   const [q,setQ]=useState(''),[offset,setOffset]=useState(0),[openId,setOpenId]=useState('');

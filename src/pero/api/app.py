@@ -343,7 +343,9 @@ def create_app(
     resolved_settings = resolved_runtime.settings
 
     started_monotonic = time.monotonic()
-    started_at = datetime.now(timezone.utc).isoformat()
+    from pero.core.timebase import now_iso as _now_iso
+
+    started_at = _now_iso()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -729,6 +731,21 @@ def create_app(
             load_view(agent_id, cid) if callable(load_view)
             else {"available": False, "reason": "unavailable", "scope": "conversation"}
         )
+        background_view = getattr(orchestrator, "background_load_view", None)
+        background_load = (
+            background_view(agent_id, cid) if callable(background_view)
+            else {"available": False, "reason": "unavailable", "scope": "conversation"}
+        )
+        plan_view = getattr(orchestrator, "retrieval_plan_view", None)
+        retrieval_plan = (
+            plan_view(agent_id, cid) if callable(plan_view)
+            else {"available": False, "reason": "unavailable", "scope": "conversation"}
+        )
+        usage_view_fn = getattr(orchestrator, "usage_view", None)
+        usage_detail = (
+            usage_view_fn(agent_id, cid) if callable(usage_view_fn)
+            else {"available": False, "reason": "unavailable", "scope": "conversation"}
+        )
         return {
             "api_version": API_VERSION,
             "agent_id": agent_id,
@@ -747,6 +764,10 @@ def create_app(
             },
             # 本会话最后一次真实装载（条数/字符/预算/时间）；未装载时 available=False。
             "l2_load": l2_load,
+            # 本轮各分项：旁观背景、检索计划（来源/状态/跳过原因）、分用途计量。
+            "background_load": background_load,
+            "retrieval_plan": retrieval_plan,
+            "usage_detail": usage_detail,
             "cache_usage": cache_usage,
         }
 
@@ -2212,6 +2233,14 @@ def create_app(
             return f"http:{agent_id}:{session_id}"
         if not conversation_id:
             raise _error(422,"resource_scope_missing","需要明确会话作用域")
+        # HTTP 会话的记忆键（`http:{agent}:private:{session}`）不是通道会话标识，
+        # 它是 `_mem_cid` 生成并持久化的原键：原样返回，否则状态页会看不到
+        # HTTP 会话的本轮装载、检索计划与用量。
+        import re as _re
+
+        http_memory = _re.match(r"^http:([^:]+):private:(.+)$", conversation_id)
+        if http_memory and http_memory.group(1) == agent_id:
+            return conversation_id
         from pero.channels.onebot11.mapping import parse_conversation_id
         parsed=parse_conversation_id(conversation_id)
         if parsed is None:

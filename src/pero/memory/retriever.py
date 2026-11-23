@@ -12,9 +12,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional, Sequence
 
+import re
+
 from pero.core.settings import MemorySettings
 from pero.memory.keywords import tokenize
 from pero.memory.models import (
+    LAYER_L3,
+    LAYER_L4,
+    LAYER_RAW,
     RETRIEVAL_FAILED,
     RETRIEVAL_IDENTITY_AMBIGUOUS,
     RETRIEVAL_NO_HITS,
@@ -27,6 +32,24 @@ from pero.memory.repository import SqliteMemoryRepository
 
 #: 组件标识（配置 `agents[].composition.retriever` 引用）。
 RETRIEVER_KEY = "sqlite_keyword"
+
+#: 人物问句（与编排侧检索计划同一判定口径的轻量版）：
+#: 有代词/"谁"，或"某名字 + 属性词"（"Amy喜欢什么"）。命中时默认带上 L3 事实层，
+#: 否则"他喜欢什么"这类问题只查原文与 L4 前情，永远答不出已归档的人物事实。
+_PERSON_PRONOUNS = ("他", "她", "TA", "ta", "谁", "这个人", "那位", "哪位")
+_PERSON_ATTR = re.compile(
+    r"^[^\s，。！？,!?]{1,10}(喜欢|讨厌|爱吃|住|几岁|多大|什么星座|生日|"
+    r"在哪|做什么|干什么|工作|学校|老家)"
+)
+
+
+def _person_directed(query: str) -> bool:
+    value = "".join(str(query or "").split())
+    if not value:
+        return False
+    if any(word in value for word in _PERSON_PRONOUNS):
+        return True
+    return bool(_PERSON_ATTR.match(value))
 
 
 class SqliteKeywordRetriever:
@@ -62,8 +85,14 @@ class SqliteKeywordRetriever:
         account_id: Optional[str],
         query: str,
         limit: Optional[int] = None,
+        layers: Optional[Sequence[str]] = None,
     ) -> RetrievalResult:
-        """按当前 Agent/会话范围检索；返回带状态与说明的结果。"""
+        """按当前 Agent/会话范围检索；返回带状态与说明的结果。
+
+        `layers` 由调用方的检索计划决定：人物定向要带上 L3（人物事实），
+        明确回顾可以只用 L3/L4（原文由回顾检索负责，避免同一段原文注入两次）。
+        不传时沿用"当前记忆"默认层：L4 + 原文（旧 event_journal 已退役）。
+        """
 
         if not self._repository.available:
             return RetrievalResult(
@@ -102,6 +131,18 @@ class SqliteKeywordRetriever:
                 conversation_id=conversation_id,
                 identity_ids=(identity_id,) if identity_id else (),
                 query=query,
+                # 回答前自动检索只查**当前**记忆：计划给出的层优先；人物问句默认
+                # 带上 L3 人物事实；旧 event_journal 已退役（保留只读，仅模型显式
+                # 调用记忆检索工具并指定层时才可见），不再重复注入。
+                layers=(
+                    tuple(layers)
+                    if layers
+                    else (
+                        (LAYER_L3, LAYER_L4)
+                        if _person_directed(query)
+                        else (LAYER_L4, LAYER_RAW)
+                    )
+                ),
                 limit=limit,
             )
         except Exception as exc:  # noqa: BLE001 - 检索失败要能被上层计数，而不是伪装成没命中

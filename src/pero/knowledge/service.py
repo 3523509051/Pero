@@ -166,7 +166,11 @@ class KnowledgeError(Exception):
 
 
 def _now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+    """知识库任务时间统一北京时间（带 +08:00），不用服务器本地时区。"""
+
+    from pero.core.timebase import now_iso
+
+    return now_iso()
 
 
 def _digest(data: bytes) -> str:

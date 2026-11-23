@@ -198,12 +198,12 @@
     "l3_extract_max_chars": 800,
     "chat_l1_messages": 10,
     "chat_l10_messages": 20,
-    "chat_l2_trigger": 80,
-    "chat_l2_retain": 30,
-    "chat_l2_char_budget": 16000,
-    "chat_archive_trigger": 100,
-    "chat_archive_batch": 60,
-    "chat_archive_window": 40
+    "chat_l2_trigger": 50,
+    "chat_l2_retain": 20,
+    "chat_l2_char_budget": 8000,
+    "chat_archive_trigger": 50,
+    "chat_archive_batch": 30,
+    "chat_archive_window": 20
   },
   "embeddings": {
     "enabled": false,

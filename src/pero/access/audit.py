@@ -56,7 +56,9 @@ class AccessAuditLogger:
             log_id
         """
         log_id = uuid.uuid4().hex
-        now = datetime.now(timezone.utc).isoformat()
+        from pero.core.timebase import now_iso
+
+        now = now_iso()
 
         with self._connect() as conn:
             conn.execute(

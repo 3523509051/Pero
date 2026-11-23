@@ -19,7 +19,11 @@ class AccessError(ValueError):
         super().__init__(code)
 
 def now():
-    return datetime.now(timezone.utc).isoformat()
+    """授权/访问业务时间统一北京时间（带 +08:00）。"""
+
+    from pero.core.timebase import now_iso
+
+    return now_iso()
 
 def uid(prefix):
     return prefix + uuid.uuid4().hex
@@ -153,15 +157,22 @@ class AccessService:
                     raise AccessError('request_id_conflict',409)
                 return {**self._token_public(old),'replayed':True}
             code='PERO-'+secrets.token_urlsafe(24)
-            token_id=uid('pt-'); created=now(); expires=(datetime.now(timezone.utc)+timedelta(hours=hours_valid)).isoformat()
+            from pero.core.timebase import now as _bj_now
+
+            token_id=uid('pt-'); created=now(); expires=(_bj_now()+timedelta(hours=hours_valid)).isoformat()
             c.execute('INSERT INTO activation_token(token_id,token_hash,channel_id,account_id,label,created_at,expires_at,agent_id,request_id) VALUES(?,?,?,?,?,?,?,?,?)',(token_id,hashlib.sha256(code.encode()).hexdigest(),channel_id,account_id,label,created,expires,agent_id,request_id))
             self._audit(c,'token_create',token_id)
             result=self._token_public(c.execute('SELECT * FROM activation_token WHERE token_id=?',(token_id,)).fetchone())
             return {**result,'code':code,'activation_code':code,'replayed':False}
 
     def _token_public(self,row):
+        from pero.core import timebase
+
         r=dict(row);r.pop('token_hash',None)
-        r['status']='revoked' if r['revoked'] else 'used' if r['used_at'] else 'expired' if r['expires_at']<now() else 'unused'
+        # 过期判断按绝对时刻（旧记录可能是 Z / +00:00，不能按字符串比大小）。
+        expires=timebase.to_beijing(r['expires_at'])
+        expired=bool(expires is not None and expires<timebase.now())
+        r['status']='revoked' if r['revoked'] else 'used' if r['used_at'] else 'expired' if expired else 'unused'
         return r
 
     def list_tokens(self):

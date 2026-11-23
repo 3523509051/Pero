@@ -7,10 +7,11 @@ const activeStates=['queued','running','delivering'];
 const processing:Obj={queued:'等待处理',running:'正在处理',delivering:'处理结束',completed:'处理完成',failed:'处理失败',cancelled:'已取消',interrupted:'重启中断'};
 const delivery:Obj={pending:'等待回报',sent:'已发送回复',candidate:'等待发送（自动发送未开启）',permission_changed:'未回报：会话授权或服务状态变化',not_sent:'未发送回复',unknown:'发送结果待确认'};
 const errors:Obj={job_timeout:'处理超时',delivery_timeout:'回报超时，未自动重发',delivery_failed:'回报异常，未自动重发',job_cancelled:'任务已取消',service_restarted:'服务重启导致中断'};
-function format(value:string){const date=new Date(value);return Number.isFinite(date.valueOf())?date.toLocaleString('zh-CN',{hour12:false}):'时间未提供'}
+import{fmtTime,tsMs}from './time';
+function format(value:string){return fmtTime(value,'时间未提供')}
 function duration(job:Obj){
-  const start=Date.parse(job.created_at),end=activeStates.includes(job.state)?Date.now():Date.parse(job.updated_at);
-  if(!Number.isFinite(start)||!Number.isFinite(end))return '耗时未知';
+  const start=tsMs(job.created_at),end=activeStates.includes(job.state)?Date.now():tsMs(job.updated_at);
+  if(start==null||end==null)return '耗时未知';
   const seconds=Math.max(0,Math.round((end-start)/1000));return seconds<60?`${seconds} 秒`:`${Math.floor(seconds/60)} 分 ${seconds%60} 秒`;
 }
 function attention(job:Obj){return !activeStates.includes(job.state)&&(job.state!=='completed'||job.delivery_state!=='sent')}

@@ -16,6 +16,8 @@ from typing import Optional, Sequence, Tuple, Mapping, Any
 LAYER_RAW = "raw"
 LAYER_L2 = "L2"
 LAYER_L20 = "L20"
+#: L3：从已归档交互里提取的人物事实（带逐字证据与来源原文）。
+LAYER_L3 = "L3"
 #: L4：用户明确要求保存的长期记录（不是模型自由发挥的人物画像）。
 LAYER_L4 = "L4"
 #: 事件日记：按已收尾轮次确定性生成的短事件索引。
@@ -464,6 +466,7 @@ __all__ = [
     "LAYER_JOURNAL",
     "LAYER_L2",
     "LAYER_L20",
+    "LAYER_L3",
     "LAYER_L4",
     "LAYER_RAW",
     "MISSING_REPLY_NOTE",

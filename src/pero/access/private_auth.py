@@ -7,6 +7,14 @@ from pathlib import Path
 from typing import Optional
 
 
+def _now_iso() -> str:
+    """业务时间统一北京时间（带 +08:00）。"""
+
+    from pero.core.timebase import now_iso
+
+    return now_iso()
+
+
 class PrivateChatAuthenticator:
     """私聊授权检查与权限管理。
     
@@ -172,7 +180,7 @@ class PrivateChatAuthenticator:
                 SET status=?, updated_at=?, status_revision=status_revision+1
                 WHERE grant_id=?
             """,
-                (new_status, datetime.now(timezone.utc).isoformat(), grant_id),
+                (new_status, _now_iso(), grant_id),
             )
             conn.commit()
             return cursor.rowcount > 0
@@ -185,9 +193,9 @@ class PrivateChatAuthenticator:
         Returns:
             Number of groups now accessible
         """
-        from datetime import datetime, timezone
+        from pero.core.timebase import now_iso as _now_iso
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = _now_iso()
 
         with self._connect() as conn:
             # 清空现有配置

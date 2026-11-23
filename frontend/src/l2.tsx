@@ -2,6 +2,7 @@ import {useEffect,useState} from 'react';
 import {Link} from 'react-router-dom';
 import {Bubble,unwrap} from './chat';
 import {newestFirst} from './display_order';
+import {fmtTime} from './time';
 
 type Obj=Record<string,any>;
 type Req=(path:string,method?:string,body?:unknown)=>Promise<any>;
@@ -60,7 +61,7 @@ export function L2Panel({scope,request}:{scope:string;request:Req}){
         }
       }
       await request(base+'/memory/l2/config','PATCH',body);
-      setMessage(reset?'已恢复默认（继承全局 80/30）':'已保存 · 下一次归档生效');
+      setMessage(reset?'已恢复默认（继承全局 50/20）':'已保存 · 下一次归档生效');
       await load(offset);
     }catch(e){
       setMessage('保存失败：'+String(e)+'（revision_conflict 表示版本冲突，请刷新后重试）');
@@ -102,10 +103,10 @@ export function L2Panel({scope,request}:{scope:string;request:Req}){
 
     <form className="l2-config" onSubmit={e=>{e.preventDefault();void save(false)}}>
       <label>触发条数<input type="number" min="2" max="500" value={draft.trigger}
-        placeholder={String(status?.defaults?.trigger??80)}
+        placeholder={String(status?.defaults?.trigger??50)}
         onChange={e=>setDraft({...draft,trigger:e.target.value})}/></label>
       <label>保留条数<input type="number" min="1" max="499" value={draft.retain}
-        placeholder={String(status?.defaults?.retain??30)}
+        placeholder={String(status?.defaults?.retain??20)}
         onChange={e=>setDraft({...draft,retain:e.target.value})}/></label>
       <button type="submit" disabled={busy}>保存本会话配置</button>
       <button type="button" className="secondary" disabled={busy} onClick={()=>void save(true)}>恢复默认</button>
@@ -117,6 +118,77 @@ export function L2Panel({scope,request}:{scope:string;request:Req}){
       </p>
     </form>
 
+    <h3>本轮装载分项</h3>
+    <p className="muted">
+      数值来自最近一次真实回复的装载结果（进程内存，按会话）；没有运行过就标"尚未装载"，
+      不用旧累计值冒充本轮。
+    </p>
+    <table className="l2-summary-table"><thead><tr>
+      <th>分项</th><th>状态</th><th>条数</th><th>字符</th><th>说明</th>
+    </tr></thead><tbody>
+      <tr>
+        <td>L2 未归档交互</td>
+        <td>{status?.l2_load?.available?'已装载':'未装载'}</td>
+        <td>{status?.l2_load?.loaded_items??'—'}</td>
+        <td>{status?.l2_load?.item_chars??'—'}</td>
+        <td>{status?.l2_load?.available
+          ?`预算 ${status.l2_load.budget} 字 · 省略 ${status.l2_load.omitted_items??0} 条`
+            +(status.l2_load.truncated?' · 最新一条已截断':'')
+          :(status?.l2_load?.reason||'not_loaded_yet')}</td>
+      </tr>
+      <tr>
+        <td>已归档前情</td>
+        <td>{status?.l2_load?.summary_present?'已装载':(status?.l2_load?.available?'无前情':'未装载')}</td>
+        <td>{status?.l2_load?.summary_present?1:(status?.l2_load?.available?0:'—')}</td>
+        <td>{status?.l2_load?.summary_chars??'—'}</td>
+        <td>系统整理，不是原文；与本轮交互分开计量</td>
+      </tr>
+      <tr>
+        <td>旁观背景</td>
+        <td>{status?.background_load?.state||'not_loaded_yet'}</td>
+        <td>{status?.background_load?.items??'—'}</td>
+        <td>{status?.background_load?.chars??'—'}</td>
+        <td>{status?.background_load?.available
+          ?`预算 ${status.background_load.budget} 字 · 快照 seq ${status.background_load.snapshot_seq??'—'}`
+            +(status.background_load.error_code?` · ${status.background_load.error_code}`:'')
+          :(status?.background_load?.reason||'not_loaded_yet')}</td>
+      </tr>
+      <tr>
+        <td>语义记忆检索</td>
+        <td>{status?.retrieval_plan?.memory_state||'—'}</td>
+        <td>—</td>
+        <td>—</td>
+        <td>{(status?.retrieval_plan?.sources?.reasons?.memory||'—')
+          +(status?.retrieval_plan?.sources?.memory_target
+            ?` · 目标 ${status.retrieval_plan.sources.memory_target}`:'')
+          +(status?.retrieval_plan?.sources?.memory_layers?.length
+            ?` · 层 ${status.retrieval_plan.sources.memory_layers.join('/')}`:'')}</td>
+      </tr>
+      <tr>
+        <td>回顾检索</td>
+        <td>{status?.retrieval_plan?.chat_recall_state||'—'}</td>
+        <td>—</td>
+        <td>—</td>
+        <td>{status?.retrieval_plan?.sources?.reasons?.chat_recall||'—'}</td>
+      </tr>
+      <tr>
+        <td>知识资料</td>
+        <td>{status?.retrieval_plan?.knowledge_state||'—'}</td>
+        <td>—</td>
+        <td>—</td>
+        <td>{status?.retrieval_plan?.sources?.reasons?.knowledge||'—'}</td>
+      </tr>
+      {Object.entries(status?.usage_detail?.purposes||{}).map(([name,item]:[string,any])=><tr key={name}>
+        <td>用量 · {name}</td>
+        <td>{item?.available?'真实返回':'unavailable'}</td>
+        <td>{item?.calls??'—'}</td>
+        <td>{item?.available?`prompt ${item.prompt_tokens??'—'} / output ${item.completion_tokens??'—'}`:'—'}</td>
+        <td>{item?.available
+          ?`cache 命中 ${item.prompt_cache_hit_tokens??'—'} / 未命中 ${item.prompt_cache_miss_tokens??'—'}`
+          :(item?.reason||'—')}</td>
+      </tr>)}
+    </tbody></table>
+
     <h3>归档批次</h3>
     {status?.cache_usage?.available && <p className="muted">
       缓存统计：输入 {status.cache_usage.prompt_tokens} · 命中 {status.cache_usage.cache_hit_tokens} ·
@@ -125,19 +197,19 @@ export function L2Panel({scope,request}:{scope:string;request:Req}){
     </p>}
     {status?.l2_load?.available && <p className="muted">
       装载详情：预算 {status.l2_load.budget} 字 · 快照 {String(status.l2_load.snapshot_id||'').slice(0,16)} ·
-      更新 {String(status.l2_load.updated_at||'').slice(0,19).replace('T',' ')}
+      更新 {fmtTime(status.l2_load.updated_at)}
     </p>}
     <p className="muted">装载记录：进程累计 {budget.loaded_items??0} 条 / 省略 {budget.omitted_items??0} 条（跨会话口径，非本会话数值）</p>
     {archives.length===0?<div className="empty">还没有归档记录（未达到触发条数）。</div>:
       <table className="l2-archives"><thead><tr>
-        <th>范围</th><th>条数</th><th>状态</th><th>L4 记录</th><th>更新时间</th>
+        <th>范围</th><th>条数</th><th>状态</th><th>L4 记录</th><th>更新时间（北京时间）</th>
       </tr></thead><tbody>
         {archives.map((a:Obj)=><tr key={a.archive_id}>
           <td>seq {a.from_seq}–{a.to_seq}</td>
           <td>{a.interaction_count}</td>
           <td>{STATE_TEXT[a.state]||a.state}{a.error_code?`（${a.error_code}）`:''}</td>
           <td>{a.memory_id?<code>{a.memory_id}</code>:'—'}</td>
-          <td>{String(a.updated_at||'').slice(0,19).replace('T',' ')}</td>
+          <td>{fmtTime(a.updated_at)}</td>
         </tr>)}
       </tbody></table>}
 

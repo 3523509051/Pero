@@ -553,6 +553,9 @@ class MemorySettings(BaseModel):
     #: P15：L3 人物事实（持久，独立 SQLite 表）。默认关闭：不自动抽取人格，
     #: 只在显式保存路径整理"来源可核对的明确陈述/偏好"。
     l3_enabled: bool = False
+    #: 事件（约定/安排/截止）与事实**分开开关**：关闭 L3 只禁止人物事实，
+    #: 不意外停掉事件提取；事件随后台 L2 归档同一次请求产出，不额外付费调用。
+    events_enabled: bool = True
     #: 每轮显式保存路径最多整理出的事实条数（有界）。
     #: v6 聊天流水：L1/L10/L2 是同一份持久流水的三个查询窗口，不是三份事实库。
     #: 普通回复默认只加载 L2；不再拼接 L1+L10 形成重复内容。
@@ -564,15 +567,15 @@ class MemorySettings(BaseModel):
     #: L2 独立交互窗口（按真实交互条数，用户与已确认送达的助手各计 1 条）：
     #: 未归档交互达到 `chat_l2_trigger` 条即触发一次归档，归档最旧的
     #: `trigger - retain` 条（默认 50），至少保留最近 `retain` 条。
-    chat_l2_trigger: int = 80
-    chat_l2_retain: int = 30
+    chat_l2_trigger: int = 50
+    chat_l2_retain: int = 20
     #: L2 注入的字符预算（按真实字符计，不是条数）；超出时从最早交互开始收缩，
     #: 并如实记录实际加载条数与缺失原因（不声称全部注入）。
-    chat_l2_char_budget: int = 16000
+    chat_l2_char_budget: int = 8000
     #: 归档：累积 trigger 条触发，整理较早 batch 条，保留最新 window 条完整窗口。
-    chat_archive_trigger: int = 100
-    chat_archive_batch: int = 60
-    chat_archive_window: int = 40
+    chat_archive_trigger: int = 50
+    chat_archive_batch: int = 30
+    chat_archive_window: int = 20
     #: L3 后台候选：每新增 N 条或空闲 seconds 后扫描（0 秒 = 只按条数）。
     l3_scan_every_messages: int = 20
     l3_scan_idle_seconds: float = 300.0

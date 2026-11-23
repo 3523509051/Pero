@@ -149,9 +149,11 @@ class AMapQuota:
                 "ON CONFLICT(day, kind) DO UPDATE SET used=used+1",
                 (day, kind),
             )
+            from pero.core.timebase import today as _bj_today
+
             conn.execute(
                 "DELETE FROM quota WHERE day < ?",
-                ((datetime.now(timezone.utc) - timedelta(days=32)).date().isoformat(),),
+                ((_bj_today() - timedelta(days=32)).isoformat(),),
             )
         return True
 

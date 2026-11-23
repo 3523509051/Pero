@@ -42,9 +42,17 @@ ARCHIVE_FAILED = "failed"
 ARCHIVE_INTERRUPTED = "interrupted"
 
 
-#: 群聊时间统一按用户时区（Asia/Shanghai）存为不带偏移的 ISO；
+#: 群聊时间统一按用户时区（Asia/Shanghai）存为**带偏移**的 ISO；
 #: 检索边界同用该时区，避免宿主机时区（可能 UTC）盲猜。
 USER_TZ = "Asia/Shanghai"
+
+
+def _require_epoch(value: Any, label: str) -> float:
+    """把时间窗边界转成绝对秒；解析不出来就报错，不静默放开/收紧范围。"""
+
+    from pero.core.timebase import require_epoch
+
+    return require_epoch(value, label)
 
 
 def _user_tz():
@@ -61,38 +69,40 @@ def _user_tz():
 
 
 def _now_iso() -> str:
-    from datetime import datetime
+    """业务时间统一北京时间（aware，明确 +08:00）。"""
 
-    return datetime.now(_user_tz()).replace(tzinfo=None).isoformat(timespec="seconds")
+    from pero.core.timebase import now_iso
+
+    return now_iso()
 
 
 def _normalize_occurred(value: Any) -> str:
-    """把入站时间规范为 Asia/Shanghai naïve ISO；无法解析时保留前 19 字符。"""
+    """把入站时间统一成北京时间 ISO（带 +08:00）；无法解析时保留前 19 字符。
+
+    外部来源的 `Z`/其它 offset 按原 offset 解析后转换，不改写来源原文本身。
+    """
+
+    from pero.core.timebase import format_iso
 
     raw = str(value or "").strip()
     if not raw:
         return _now_iso()
-    try:
-        from datetime import datetime
-
-        stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        if stamp.tzinfo is not None:
-            stamp = stamp.astimezone(_user_tz()).replace(tzinfo=None)
-        return stamp.isoformat(timespec="seconds")
-    except Exception:  # noqa: BLE001
-        return raw[:19]
+    formatted = format_iso(raw)
+    return formatted or raw[:19]
 
 
 def _stale(updated: str, seconds: float) -> bool:
-    """判断时间戳是否过期；无法解析时按过期处理（允许恢复，不永久卡住）。"""
+    """判断时间戳是否过期；按绝对时刻比较，不用字符串字典序。
 
-    try:
-        from datetime import datetime
+    无法解析时按过期处理（允许恢复，不永久卡住）。
+    """
 
-        stamp = datetime.fromisoformat(str(updated))
-        return (datetime.now(stamp.tzinfo) - stamp).total_seconds() > float(seconds)
-    except Exception:  # noqa: BLE001
+    from pero.core import timebase
+
+    stamp = timebase.to_beijing(updated)
+    if stamp is None:
         return True
+    return (timebase.now() - stamp).total_seconds() > float(seconds)
 
 
 def _clean_media(items: Iterable[Any]) -> List[Dict[str, Any]]:
@@ -233,9 +243,15 @@ class ChatStreamMixin:
 
     def chat_window(self, *, agent_id: str, conversation_id: str, limit: int,
                     before_seq: Optional[int] = None,
+                    exclude_event_ids: Sequence[str] = (),
                     exclude_source_event_ids: Sequence[str] = (),
                     include_tools: bool = False) -> List[Dict[str, Any]]:
-        """取最后 limit 条（正序返回）；可按 seq 截止或排除当前触发消息。"""
+        """取最后 limit 条（正序返回）；可按 seq 截止或排除当前触发消息。
+
+        两种 ID 命名空间**分开**过滤，不做字符串互猜：
+        - `exclude_event_ids`：本表规范主键 `chat_event.event_id`（ce-…）；
+        - `exclude_source_event_ids`：桥/通道来源 ID（`source_event_id`）。
+        """
 
         limit = max(1, min(int(limit), 200))
         clauses = ["agent_id=?", "conversation_id=?"]
@@ -243,6 +259,11 @@ class ChatStreamMixin:
         if before_seq is not None:
             clauses.append("seq<=?")
             params.append(int(before_seq))
+        excluded_events = [str(item)[:80] for item in (exclude_event_ids or ()) if str(item)]
+        if excluded_events:
+            placeholders = ",".join("?" * len(excluded_events))
+            clauses.append(f"event_id NOT IN ({placeholders})")
+            params.extend(excluded_events)
         excluded = [str(item)[:250] for item in (exclude_source_event_ids or ()) if str(item)]
         if excluded:
             placeholders = ",".join("?" * len(excluded))
@@ -261,12 +282,18 @@ class ChatStreamMixin:
         return items
 
     def chat_snapshot(self, *, agent_id: str, conversation_id: str, limit: int,
+                      exclude_event_ids: Sequence[str] = (),
                       exclude_source_event_ids: Sequence[str] = ()) -> Dict[str, Any]:
         """**单事务**取窗口与截止/计数：避免"先 window 再 counts"边界漂移。"""
 
         limit = max(1, min(int(limit), 200))
         clauses = ["agent_id=?", "conversation_id=?"]
         params: List[Any] = [agent_id, conversation_id]
+        excluded_events = [str(item)[:80] for item in (exclude_event_ids or ()) if str(item)]
+        if excluded_events:
+            placeholders = ",".join("?" * len(excluded_events))
+            clauses.append(f"event_id NOT IN ({placeholders})")
+            params.extend(excluded_events)
         excluded = [str(item)[:250] for item in (exclude_source_event_ids or ()) if str(item)]
         if excluded:
             placeholders = ",".join("?" * len(excluded))
@@ -650,8 +677,10 @@ class ChatStreamMixin:
         from datetime import datetime, timedelta
 
         now = _now_iso()
-        next_at = (datetime.now(_user_tz()) + timedelta(
-            seconds=max(1.0, float(retry_seconds)))).replace(tzinfo=None).isoformat(timespec="seconds")
+        from pero.core.timebase import now as _bj_now
+
+        next_at = (_bj_now() + timedelta(
+            seconds=max(1.0, float(retry_seconds)))).isoformat(timespec="seconds")
         with self._txn() as cur:
             row = cur.execute(
                 "SELECT attempts,max_attempts FROM chat_task WHERE agent_id=? AND conversation_id=? AND kind=?",
@@ -697,8 +726,11 @@ class ChatStreamMixin:
             )
             if pending:cur.execute("UPDATE chat_task SET state='pending' WHERE agent_id=? AND conversation_id=? AND kind=?",(agent_id,conversation_id,kind))
             if cooldown_seconds:
-                from datetime import datetime,timedelta
-                until=(datetime.now(_user_tz())+timedelta(seconds=cooldown_seconds)).replace(tzinfo=None).isoformat(timespec='seconds')
+                from datetime import timedelta
+
+                from pero.core.timebase import now as _bj_now
+
+                until=(_bj_now()+timedelta(seconds=cooldown_seconds)).isoformat(timespec='seconds')
                 cur.execute('UPDATE chat_task SET next_allowed_at=? WHERE agent_id=? AND conversation_id=? AND kind=?',(until,agent_id,conversation_id,kind))
 
     def chat_l3_eligible(self,*,agent_id,conversation_id,after_seq):
@@ -712,7 +744,7 @@ class ChatStreamMixin:
                 "SELECT agent_id,conversation_id,kind,cursor_seq,attempts,max_attempts,"
                 "state,error_code,next_allowed_at,manual_required FROM chat_task "
                 "WHERE manual_required=0 AND state IN ('pending','failed','running') "
-                "ORDER BY updated_at ASC LIMIT ?",
+                "ORDER BY bj_epoch(updated_at) ASC, fact_id ASC LIMIT ?",
                 (max(1, min(int(limit), 50)),),
             ).fetchall()
         return [dict(row) if hasattr(row, "keys") else {
@@ -755,8 +787,9 @@ class ChatStreamMixin:
             clauses.append("status=?")
             params.append(status)
         if status=='active':
-            clauses.append('(valid_until IS NULL OR valid_until>?)')
-            params.append(_now_iso())
+            # 生效期按绝对时刻比较：旧库里 valid_until 可能是 UTC 文本。
+            clauses.append('(valid_until IS NULL OR bj_epoch(valid_until)>?)')
+            params.append(_require_epoch(_now_iso(), "now"))
         if identity_id:
             clauses.append("identity_id=?")
             params.append(identity_id)
@@ -766,7 +799,8 @@ class ChatStreamMixin:
                 "SELECT fact_id,identity_id,display_name,content,status,evidence_type,"
                 "evidence_quote,source_record_ids,source_seqs_json,record_mode,valid_until,"
                 "replaces_fact_id,occurred_at,updated_at FROM l3_fact WHERE " +
-                " AND ".join(clauses) + " ORDER BY updated_at DESC LIMIT ?",
+                " AND ".join(clauses)
+                + " ORDER BY bj_epoch(updated_at) DESC, fact_id DESC LIMIT ?",
                 params,
             ).fetchall()
         result = []
@@ -897,12 +931,15 @@ class ChatStreamMixin:
         like = " OR ".join(["text LIKE ?"] * len(terms))
         clauses.append(f"({like})")
         params.extend([f"%{term}%" for term in terms])
+        # 时间窗按**绝对时刻**过滤：旧库可能存 `Z`/`+00:00`，新写入是 `+08:00`，
+        # 直接比字符串会把"北京 11-24 06:00"（存为 11-23T22:00Z）滤掉。
+        # 范围在 SQL 里先于 LIMIT 生效，不存在"先截断再过滤"的漏召回。
         if since:
-            clauses.append("occurred_at>=?")
-            params.append(since)
+            clauses.append("bj_epoch(occurred_at)>=?")
+            params.append(_require_epoch(since, "since"))
         if until:
-            clauses.append("occurred_at<=?")
-            params.append(until)
+            clauses.append("bj_epoch(occurred_at)<=?")
+            params.append(_require_epoch(until, "until"))
         params.append(max(1, min(int(limit), 20)))
         with self._txn() as cur:
             rows = cur.execute(
@@ -958,6 +995,22 @@ class ChatStreamMixin:
                             participants: Sequence[str] = (), source_seqs: Sequence[int] = (),
                             occurred_at: str = "", planned_at: str = "",
                             dedupe_key: str = "") -> Dict[str, Any]:
+        with self._txn() as cur:
+            return self._memory_event_upsert_cur(
+                cur, agent_id=agent_id, conversation_id=conversation_id, kind=kind,
+                status=status, title=title, detail=detail, participants=participants,
+                source_seqs=source_seqs, occurred_at=occurred_at,
+                planned_at=planned_at, dedupe_key=dedupe_key,
+            )
+
+    def _memory_event_upsert_cur(self, cur, *, agent_id: str, conversation_id: str,
+                                kind: str, status: str, title: str, detail: str,
+                                participants: Sequence[str] = (),
+                                source_seqs: Sequence[int] = (),
+                                occurred_at: str = "", planned_at: str = "",
+                                dedupe_key: str = "") -> Dict[str, Any]:
+        """`memory_event_upsert` 的事务内实现（供 L2 归档同事务提交复用）。"""
+
         # 稳定关联：同会话 + 同 kind + 归一标题 → 同一条事件，detail/status 只更新，
         # 不因叙述变化新建。明确传入 dedupe_key 时优先。
         normalized = "".join(
@@ -967,46 +1020,45 @@ class ChatStreamMixin:
             f"{conversation_id}\x1f{kind}\x1f{normalized}".encode()
         ).hexdigest()[:32]
         now = _now_iso()
-        with self._txn() as cur:
-            # 只保留确实属于本会话的序号（模型给的序号不做真实来源）。
-            seqs = [int(item) for item in source_seqs][:200]
-            valid_seqs: List[int] = []
-            if seqs:
-                placeholders = ",".join("?" * len(seqs))
-                rows = cur.execute(
-                    "SELECT seq FROM chat_event WHERE agent_id=? AND conversation_id=? "
-                    f"AND seq IN ({placeholders})",
-                    (agent_id, conversation_id, *seqs),
-                ).fetchall()
-                valid_seqs = sorted({int(row[0]) for row in rows})
-            source_seqs = valid_seqs
-            existing = cur.execute(
-                "SELECT * FROM memory_event WHERE agent_id=? AND conversation_id=? AND dedupe_key=?",
-                (agent_id, conversation_id, dedupe),
-            ).fetchone()
-            if existing is not None:
-                cur.execute('INSERT INTO memory_event_history VALUES(?,?,?,?,?,?)',('meh-'+uuid.uuid4().hex,existing['event_id'],agent_id,conversation_id,json.dumps(dict(existing),ensure_ascii=False),now))
-                source_seqs=sorted(set(source_seqs)|set(json.loads(existing['source_seqs_json'] or '[]')))
-                cur.execute(
-                    "UPDATE memory_event SET status=?,title=?,detail=?,participants_json=?,"
-                    "source_seqs_json=?,occurred_at=?,planned_at=?,updated_at=? WHERE event_id=?",
-                    (status, title[:200], detail[:2000],
-                     json.dumps([str(item)[:120] for item in participants][:20], ensure_ascii=False),
-                     json.dumps([int(item) for item in source_seqs][:200]),
-                     occurred_at or None, planned_at or None, now, existing[0]),
-                )
-                return {"event_id": existing[0], "updated": True}
-            event_id = "me-" + uuid.uuid4().hex
+        # 只保留确实属于本会话的序号（模型给的序号不做真实来源）。
+        seqs = [int(item) for item in source_seqs][:200]
+        valid_seqs: List[int] = []
+        if seqs:
+            placeholders = ",".join("?" * len(seqs))
+            rows = cur.execute(
+                "SELECT seq FROM chat_event WHERE agent_id=? AND conversation_id=? "
+                f"AND seq IN ({placeholders})",
+                (agent_id, conversation_id, *seqs),
+            ).fetchall()
+            valid_seqs = sorted({int(row[0]) for row in rows})
+        source_seqs = valid_seqs
+        existing = cur.execute(
+            "SELECT * FROM memory_event WHERE agent_id=? AND conversation_id=? AND dedupe_key=?",
+            (agent_id, conversation_id, dedupe),
+        ).fetchone()
+        if existing is not None:
+            cur.execute('INSERT INTO memory_event_history VALUES(?,?,?,?,?,?)',('meh-'+uuid.uuid4().hex,existing['event_id'],agent_id,conversation_id,json.dumps(dict(existing),ensure_ascii=False),now))
+            source_seqs=sorted(set(source_seqs)|set(json.loads(existing['source_seqs_json'] or '[]')))
             cur.execute(
-                "INSERT INTO memory_event(event_id,agent_id,conversation_id,kind,status,title,detail,"
-                "participants_json,source_seqs_json,occurred_at,planned_at,created_at,updated_at,dedupe_key) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (event_id, agent_id, conversation_id, kind[:20], status[:20], title[:200],
-                 detail[:2000],
+                "UPDATE memory_event SET status=?,title=?,detail=?,participants_json=?,"
+                "source_seqs_json=?,occurred_at=?,planned_at=?,updated_at=? WHERE event_id=?",
+                (status, title[:200], detail[:2000],
                  json.dumps([str(item)[:120] for item in participants][:20], ensure_ascii=False),
                  json.dumps([int(item) for item in source_seqs][:200]),
-                 occurred_at or None, planned_at or None, now, now, dedupe),
+                 occurred_at or None, planned_at or None, now, existing[0]),
             )
+            return {"event_id": existing[0], "updated": True}
+        event_id = "me-" + uuid.uuid4().hex
+        cur.execute(
+            "INSERT INTO memory_event(event_id,agent_id,conversation_id,kind,status,title,detail,"
+            "participants_json,source_seqs_json,occurred_at,planned_at,created_at,updated_at,dedupe_key) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (event_id, agent_id, conversation_id, kind[:20], status[:20], title[:200],
+             detail[:2000],
+             json.dumps([str(item)[:120] for item in participants][:20], ensure_ascii=False),
+             json.dumps([int(item) for item in source_seqs][:200]),
+             occurred_at or None, planned_at or None, now, now, dedupe),
+        )
         return {"event_id": event_id, "updated": False}
 
     def l4_summary_upsert(
@@ -1051,25 +1103,113 @@ class ChatStreamMixin:
     def l3_from_archive(self,*,agent_id,conversation_id,archive_id,facts):
         """Bind accepted facts to a successfully archived member's raw identity."""
         with self._txn() as cur:
-            rows=cur.execute("SELECT ce.event_id,ce.text,ce.source_record_id,r.sender_identity_id,ce.display_name,ce.seq,ce.occurred_at "
-                "FROM l2_interaction i JOIN chat_event ce ON ce.event_id=i.event_id "
-                "JOIN l2_archive a ON a.archive_id=i.archive_id "
-                "JOIN raw_message r ON r.record_id=ce.source_record_id AND r.agent_id=i.agent_id AND r.conversation_id=i.conversation_id "
-                "WHERE i.agent_id=? AND i.conversation_id=? AND i.archive_id=? AND a.state='completed' "
-                "AND ce.role='member' AND ce.kind='text'",(agent_id,conversation_id,archive_id)).fetchall()
-        sources={str(row[0]):row for row in rows};written=0
-        for fact in facts[:3]:
-            source=sources.get(str(fact.get('source_event_id') or ''))
-            if not source or not source[2] or not source[3] or not fact.get('quote') or fact['quote'] not in source[1]:continue
-            with self._txn() as cur:
-                previous=cur.execute('SELECT status FROM l3_fact WHERE agent_id=? AND conversation_id=? AND identity_id=? AND content_hash=?',
-                    (agent_id,conversation_id,source[3],hashlib.sha256(fact['content'].encode('utf-8')).hexdigest()[:32])).fetchone()
-            if previous is not None and previous[0] in ('revoked','replaced'):continue
-            saved=self.l3_candidate_upsert(agent_id=agent_id,conversation_id=conversation_id,identity_id=source[3],
-                content=fact['content'],evidence_quote=fact['quote'],source_record_ids=[source[2]],
-                display_name=str(source[4] or ''),source_seqs=[source[5]],occurred_at=str(source[6] or ''),
-                status='active',record_mode='l2_archive',evidence_type='explicit_preference' if fact.get('category')=='stable_preference' else 'explicit_statement')
-            if saved and not saved.get('duplicate'):written+=1
+            return self._l3_from_archive_cur(
+                cur, agent_id=agent_id, conversation_id=conversation_id,
+                archive_id=archive_id, facts=facts,
+            )
+
+    def _archived_member_sources(self, cur, *, agent_id: str, conversation_id: str,
+                                 archive_id: str) -> Dict[str, Any]:
+        """本批已归档成员原话：event_id → (text, record_id, identity, name, seq, occurred_at)。
+
+        只认 `l2_archive.state='completed'` 且 `l2_interaction` 实际归属本批的行；
+        来源 ID 存在只证明"引用合法"，不证明 detail 为真（逐字 quote 另行核对）。
+        """
+
+        rows = cur.execute(
+            "SELECT ce.event_id,ce.text,ce.source_record_id,r.sender_identity_id,"
+            "ce.display_name,ce.seq,ce.occurred_at "
+            "FROM l2_interaction i JOIN chat_event ce ON ce.event_id=i.event_id "
+            "JOIN l2_archive a ON a.archive_id=i.archive_id "
+            "JOIN raw_message r ON r.record_id=ce.source_record_id "
+            "  AND r.agent_id=i.agent_id AND r.conversation_id=i.conversation_id "
+            "WHERE i.agent_id=? AND i.conversation_id=? AND i.archive_id=? AND a.state='completed' "
+            "AND ce.role='member' AND ce.kind='text'",
+            (agent_id, conversation_id, archive_id),
+        ).fetchall()
+        return {str(row[0]): row for row in rows}
+
+    def _l3_from_archive_cur(self, cur, *, agent_id, conversation_id, archive_id, facts):
+        """`l3_from_archive` 的事务内实现。"""
+
+        sources = self._archived_member_sources(
+            cur, agent_id=agent_id, conversation_id=conversation_id,
+            archive_id=archive_id,
+        )
+        written = 0
+        for fact in list(facts or ())[:3]:
+            source = sources.get(str(fact.get('source_event_id') or ''))
+            if (not source or not source[2] or not source[3]
+                    or not fact.get('quote') or fact['quote'] not in source[1]):
+                continue
+            previous = cur.execute(
+                'SELECT status FROM l3_fact WHERE agent_id=? AND conversation_id=? '
+                'AND identity_id=? AND content_hash=?',
+                (agent_id, conversation_id, source[3],
+                 hashlib.sha256(fact['content'].encode('utf-8')).hexdigest()[:32]),
+            ).fetchone()
+            if previous is not None and previous[0] in ('revoked', 'replaced'):
+                continue
+            saved = self._l3_candidate_upsert_cur(
+                cur, agent_id=agent_id, conversation_id=conversation_id,
+                identity_id=source[3], content=fact['content'],
+                evidence_quote=fact['quote'], source_record_ids=[source[2]],
+                display_name=str(source[4] or ''), source_seqs=[source[5]],
+                occurred_at=str(source[6] or ''), status='active',
+                record_mode='l2_archive',
+                evidence_type=('explicit_preference'
+                               if fact.get('category') == 'stable_preference'
+                               else 'explicit_statement'),
+            )
+            if saved and not saved.get('duplicate'):
+                written += 1
+        return written
+
+    def _events_from_archive_cur(self, cur, *, agent_id: str, conversation_id: str,
+                                 archive_id: str, events: Sequence[Any]) -> int:
+        """把**已通过逐字证据校验**的事件与摘要同事务写入。
+
+        `events` 由调用方（`chat_memory`）产出，每项含 source_event_id/quote/
+        title/detail/status/occurred_at/planned_at。这里再做一次来源与逐字核对：
+        来源必须属于本批已归档成员原话，quote 必须逐字出现在该原话中；
+        participants 只用该原话的真实身份，拿不到就留空（不写 "NONE" 当人物）。
+        """
+
+        sources = self._archived_member_sources(
+            cur, agent_id=agent_id, conversation_id=conversation_id,
+            archive_id=archive_id,
+        )
+        written = 0
+        for event in list(events or ())[:2]:
+            if not isinstance(event, dict):
+                continue
+            source = sources.get(str(event.get('source_event_id') or ''))
+            if source is None:
+                continue
+            quote = str(event.get('quote') or '').strip()
+            title = str(event.get('title') or '').strip()
+            detail = str(event.get('detail') or '').strip()
+            status = str(event.get('status') or 'ongoing').lower()
+            if not quote or quote not in str(source[1] or ''):
+                continue
+            if not 4 <= len(title) <= 40 or not 4 <= len(detail) <= 200:
+                continue
+            if status not in {'planned', 'ongoing', 'done'}:
+                status = 'ongoing'
+            identity = str(source[3] or '')
+            participants = [identity] if identity else []
+            dedupe = hashlib.sha256(
+                f"{conversation_id}\x1fevent\x1f{source[0]}\x1f{title[:40]}".encode()
+            ).hexdigest()[:32]
+            self._memory_event_upsert_cur(
+                cur, agent_id=agent_id, conversation_id=conversation_id,
+                kind='event', status=status, title=title, detail=detail,
+                participants=participants, source_seqs=[int(source[5] or 0)],
+                occurred_at=str(event.get('occurred_at') or ''),
+                planned_at=str(event.get('planned_at') or ''),
+                dedupe_key=dedupe,
+            )
+            written += 1
         return written
 
     def l3_candidate_upsert(
@@ -1088,6 +1228,25 @@ class ChatStreamMixin:
         返回 `{fact_id, duplicate, status}`；校验失败返回 None。
         """
 
+        with self._txn() as cur:
+            return self._l3_candidate_upsert_cur(
+                cur, agent_id=agent_id, conversation_id=conversation_id,
+                identity_id=identity_id, content=content, evidence_quote=evidence_quote,
+                source_record_ids=source_record_ids, display_name=display_name,
+                source_seqs=source_seqs, occurred_at=occurred_at, status=status,
+                evidence_type=evidence_type, replaces_fact_id=replaces_fact_id,
+                record_mode=record_mode,
+            )
+
+    def _l3_candidate_upsert_cur(
+        self, cur, *, agent_id: str, conversation_id: str, identity_id: str,
+        content: str, evidence_quote: str, source_record_ids: Sequence[str],
+        display_name: str = "", source_seqs: Sequence[int] = (),
+        occurred_at: str = "", status: str = "candidate",
+        evidence_type: str = "explicit_statement", replaces_fact_id: str = "", record_mode: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """`l3_candidate_upsert` 的事务内实现。"""
+
         text = (content or "").strip()
         quote = (evidence_quote or "").strip()
         records = [str(item) for item in (source_record_ids or ()) if str(item)]
@@ -1095,52 +1254,51 @@ class ChatStreamMixin:
             return None
         if status not in {"candidate", "active", "replaced", "revoked"}:
             return None
-        with self._txn() as cur:
-            placeholders = ",".join("?" for _ in records)
-            rows = cur.execute(
-                "SELECT record_id,text FROM raw_message WHERE agent_id=? AND conversation_id=? "
-                f"AND record_id IN ({placeholders})",
-                (agent_id, conversation_id, *records),
-            ).fetchall()
-            found = {row[0]: row[1] for row in rows}
-            if set(found) != set(records):
-                return None
-            if not any(quote in (value or "") for value in found.values()):
-                return None
-            content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
-            existing = cur.execute(
-                "SELECT fact_id,status FROM l3_fact WHERE agent_id=? AND conversation_id=? "
-                "AND identity_id=? AND content_hash=?",
-                (agent_id, conversation_id, identity_id, content_hash),
-            ).fetchone()
-            now = _now_iso()
-            if existing is not None:
-                fact_id, current = existing[0], str(existing[1] or "")
-                merged_status = "active" if current == "active" else status
-                cur.execute(
-                    "UPDATE l3_fact SET status=?,updated_at=?,evidence_quote=?,"
-                    "source_seqs_json=?,record_mode=?,valid_until=NULL,"
-                    "replaces_fact_id=COALESCE(?,replaces_fact_id) WHERE fact_id=?",
-                    (merged_status, now, quote,
-                     json.dumps([int(item) for item in source_seqs][:200]),
-                     record_mode or ("background" if status == "candidate" else "explicit"),
-                     replaces_fact_id or None, fact_id),
-                )
-                return {"fact_id": fact_id, "duplicate": True, "status": merged_status}
-            fact_id = "lf-" + uuid.uuid4().hex
+        placeholders = ",".join("?" for _ in records)
+        rows = cur.execute(
+            "SELECT record_id,text FROM raw_message WHERE agent_id=? AND conversation_id=? "
+            f"AND record_id IN ({placeholders})",
+            (agent_id, conversation_id, *records),
+        ).fetchall()
+        found = {row[0]: row[1] for row in rows}
+        if set(found) != set(records):
+            return None
+        if not any(quote in (value or "") for value in found.values()):
+            return None
+        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+        existing = cur.execute(
+            "SELECT fact_id,status FROM l3_fact WHERE agent_id=? AND conversation_id=? "
+            "AND identity_id=? AND content_hash=?",
+            (agent_id, conversation_id, identity_id, content_hash),
+        ).fetchone()
+        now = _now_iso()
+        if existing is not None:
+            fact_id, current = existing[0], str(existing[1] or "")
+            merged_status = "active" if current == "active" else status
             cur.execute(
-                "INSERT INTO l3_fact(fact_id,agent_id,conversation_id,identity_id,display_name,"
-                "content,content_hash,status,evidence_type,evidence_quote,source_record_ids,"
-                "occurred_at,extracted_at,updated_at,record_mode,valid_until,replaces_fact_id,"
-                "source_seqs_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)",
-                (fact_id, agent_id, conversation_id, identity_id, display_name[:120],
-                 text, content_hash, status, evidence_type, quote,
-                 json.dumps(records, ensure_ascii=False),
-                 occurred_at or None, now, now,
+                "UPDATE l3_fact SET status=?,updated_at=?,evidence_quote=?,"
+                "source_seqs_json=?,record_mode=?,valid_until=NULL,"
+                "replaces_fact_id=COALESCE(?,replaces_fact_id) WHERE fact_id=?",
+                (merged_status, now, quote,
+                 json.dumps([int(item) for item in source_seqs][:200]),
                  record_mode or ("background" if status == "candidate" else "explicit"),
-                 replaces_fact_id or None,
-                 json.dumps([int(item) for item in source_seqs][:200])),
+                 replaces_fact_id or None, fact_id),
             )
+            return {"fact_id": fact_id, "duplicate": True, "status": merged_status}
+        fact_id = "lf-" + uuid.uuid4().hex
+        cur.execute(
+            "INSERT INTO l3_fact(fact_id,agent_id,conversation_id,identity_id,display_name,"
+            "content,content_hash,status,evidence_type,evidence_quote,source_record_ids,"
+            "occurred_at,extracted_at,updated_at,record_mode,valid_until,replaces_fact_id,"
+            "source_seqs_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)",
+            (fact_id, agent_id, conversation_id, identity_id, display_name[:120],
+             text, content_hash, status, evidence_type, quote,
+             json.dumps(records, ensure_ascii=False),
+             occurred_at or None, now, now,
+             record_mode or ("background" if status == "candidate" else "explicit"),
+             replaces_fact_id or None,
+             json.dumps([int(item) for item in source_seqs][:200])),
+        )
         return {"fact_id": fact_id, "duplicate": False, "status": status}
 
     def memory_event_list(self, *, agent_id: str, conversation_id: str,
@@ -1155,7 +1313,7 @@ class ChatStreamMixin:
             rows = cur.execute(
                 "SELECT event_id,kind,status,title,detail,participants_json,source_seqs_json,"
                 "occurred_at,planned_at,created_at,updated_at FROM memory_event WHERE " +
-                " AND ".join(clauses) + " ORDER BY COALESCE(occurred_at,created_at) DESC, event_id DESC LIMIT ?",
+                " AND ".join(clauses) + " ORDER BY COALESCE(bj_epoch(occurred_at),bj_epoch(created_at)) DESC, event_id DESC LIMIT ?",
                 params,
             ).fetchall()
         result = []
@@ -1419,7 +1577,7 @@ class ChatStreamMixin:
         latest = cur.execute(
             "SELECT archive_id,state,from_seq,to_seq,interaction_count,memory_id,"
             " error_code,attempts,created_at,updated_at FROM l2_archive "
-            "WHERE agent_id=? AND conversation_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            "WHERE agent_id=? AND conversation_id=? ORDER BY bj_epoch(created_at) DESC, rowid DESC LIMIT 1",
             (agent_id, conversation_id),
         ).fetchone()
         return {
@@ -1651,18 +1809,25 @@ class ChatStreamMixin:
                           conversation_id: str, memory_id: str, content: str,
                           interaction_count: int = 0,
                           event_ids: Sequence[str] = (),
-                          previous_archive_id: str = "") -> bool:
+                          previous_archive_id: str = "",
+                          facts: Sequence[Any] = (),
+                          events: Sequence[Any] = ()) -> Dict[str, Any]:
         """**单一事务**：写 L4 前情（status='saved'）+ 覆盖标记 + 批次 completed。
 
         只标记本批次实际包含的交互（`state='archived'`），绝不按 seq 区间批量更新，
         因此归档期间新到的交互不会被误标；任一步失败整体回滚。
         `previous_archive_id` 是计划时依赖的前情版本：提交时核验它仍是最新完成
         前情，否则说明并发归档已推进，本次按失败处理（不覆盖新前情）。
+
+        `facts`/`events` 是**同一次摘要请求**里已通过证据校验的派生输出：
+        与 L2 覆盖标记、L3 事实、事件在**同一个事务**里提交，任一步失败整体回滚，
+        因此不存在"摘要已提交、派生数据丢了且无法补写"的窗口。
+        返回 `{"ok": bool, "facts_written": n, "events_written": n}`。
         """
 
         text = (content or "").strip()
         if not text or not memory_id:
-            return False
+            return {"ok": False, "facts_written": 0, "events_written": 0}
         now = _now_iso()
         # Distinct archive batches may legitimately produce identical wording.
         # Their source ranges and parent summaries must remain independent.
@@ -1676,7 +1841,7 @@ class ChatStreamMixin:
                 (archive_id, agent_id),
             ).fetchone()
             if row is None or str(row[0]) != ARCHIVE_RUNNING:
-                return False
+                return {"ok": False, "facts_written": 0, "events_written": 0}
             latest = cur.execute(
                 "SELECT a.archive_id,a.memory_id FROM l2_archive a "
                 "WHERE a.agent_id=? AND a.conversation_id=? AND a.state='completed' "
@@ -1686,7 +1851,7 @@ class ChatStreamMixin:
             current_previous = str(latest[0]) if latest is not None else ""
             if current_previous != str(previous_archive_id or ""):
                 # 计划依赖的前情已变化：本次摘要的输入不再是当前覆盖的延续。
-                return False
+                return {"ok": False, "facts_written": 0, "events_written": 0}
             from_seq, to_seq = int(row[2]), int(row[1])
             wanted = [str(x)[:80] for x in (event_ids or ()) if str(x)]
             if wanted:
@@ -1706,7 +1871,7 @@ class ChatStreamMixin:
                     (agent_id, conversation_id, to_seq, from_seq),
                 ).fetchall()
             if not items:
-                return False
+                return {"ok": False, "facts_written": 0, "events_written": 0}
             # 区间只收窄不放宽：实际覆盖到哪就记到哪。
             covered_to = int(items[-1][2])
             to_seq = min(to_seq, covered_to)
@@ -1753,7 +1918,18 @@ class ChatStreamMixin:
                 "interaction_count=?,to_seq=?,error_code='',updated_at=? WHERE archive_id=?",
                 (saved_id, len(text), len(items), to_seq, now, archive_id),
             )
-            return True
+
+            return {
+                "ok": True,
+                "facts_written": self._l3_from_archive_cur(
+                    cur, agent_id=agent_id, conversation_id=conversation_id,
+                    archive_id=archive_id, facts=facts,
+                ),
+                "events_written": self._events_from_archive_cur(
+                    cur, agent_id=agent_id, conversation_id=conversation_id,
+                    archive_id=archive_id, events=events,
+                ),
+            }
 
     def l2_archive_status(self, *, agent_id: str, conversation_id: str,
                           limit: int = 10) -> Dict[str, Any]:
@@ -1762,7 +1938,7 @@ class ChatStreamMixin:
             rows = cur.execute(
                 "SELECT archive_id,from_seq,to_seq,interaction_count,state,error_code,"
                 " memory_id,summary_chars,attempts,created_at,updated_at FROM l2_archive "
-                "WHERE agent_id=? AND conversation_id=? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                "WHERE agent_id=? AND conversation_id=? ORDER BY bj_epoch(created_at) DESC, rowid DESC LIMIT ?",
                 (agent_id, conversation_id, max(1, min(int(limit), 50))),
             ).fetchall()
         pending = counts["active"]

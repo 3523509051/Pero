@@ -28,11 +28,19 @@ class UnknownComponentError(ComponentRegistryError):
     """查询未登记的组件 ID。"""
 
 
+def _registered_at() -> str:
+    """注册时间用北京时间（带 +08:00），不用服务器本地时区。"""
+
+    from pero.core.timebase import now_iso
+
+    return now_iso()
+
+
 @dataclass(frozen=True)
 class RegisteredComponent:
     descriptor: ComponentDescriptor
     instance: Any = None
-    registered_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    registered_at: str = field(default_factory=lambda: _registered_at())
 
     @property
     def has_instance(self) -> bool:

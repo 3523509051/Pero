@@ -50,7 +50,11 @@ _MAX_FILES = 200
 
 
 def _utc() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    """插件安装/更新时间统一北京时间（带 +08:00）。"""
+
+    from pero.core.timebase import now_iso
+
+    return now_iso()
 
 
 class PluginRuntime:
@@ -130,7 +134,10 @@ class PluginRuntime:
             raw = await self.worker.call(
                 name, dict(arguments), sdk.config.all(),
                 {"run_id": sdk.context.run_id, "agent_id": sdk.context.agent_id,
-                 "conversation_id": sdk.context.conversation_id, "scope_ref":sdk.context.scope_ref, "channel_id":sdk.context.channel_id},
+                 "conversation_id": sdk.context.conversation_id, "scope_ref":sdk.context.scope_ref,
+                 "channel_id":sdk.context.channel_id,
+                 # 容器/子进程与宿主用同一时区；显式传，不依赖 worker 端默认值。
+                 "timezone": getattr(sdk.context, "timezone", "") or "Asia/Shanghai"},
                 network_hosts=self.network_hosts,timeout_override=sdk.context.background_timeout,
             )
             artifacts = []

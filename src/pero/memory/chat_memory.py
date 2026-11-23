@@ -59,8 +59,34 @@ _EXPLICIT_EVIDENCE = {"explicit_statement", "explicit_preference"}
 #: 明确纠正的触发词（只处理"用户在纠正某人"的场景）。
 _CORRECTION_WORDS = ("不是", "改成", "纠正", "不对", "其实", "说错", "撤回")
 
+#: 事件类别边界：只有安排/约定/截止/活动类措辞才可能成为事件。
+_EVENT_CUES = (
+    "约", "约定", "定", "计划", "安排", "报名", "集合", "出发", "截止",
+    "提交", "交作业", "开会", "会议", "活动", "比赛", "考试", "聚会",
+    "生日", "上线", "开播", "更新", "发布", "见面", "开始", "结束",
+)
 
-def _now_local() -> str:
+#: 明确的非事件措辞：偏好、寒暄、媒体行为与即时状态。
+_NON_EVENT_WORDS = (
+    "喜欢你", "爱吃", "不吃", "讨厌", "最爱", "你好", "晚安", "早安",
+    "哈哈", "发送图片", "发了图片", "发送表情", "表情包", "在吗", "谢谢",
+)
+
+_RELATIVE_DAYS = (("大后天", 3), ("后天", 2), ("明天", 1), ("明晚", 1),
+                  ("今天", 0), ("今晚", 0))
+
+
+def _is_non_event_wording(text: str) -> bool:
+    return any(word in (text or "") for word in _NON_EVENT_WORDS)
+
+
+def _has_event_cue(text: str) -> bool:
+    return any(cue in (text or "") for cue in _EVENT_CUES)
+
+
+def _source_date(value: str):
+    """来源原文的发生日期（用户时区）；解析失败返回 None。"""
+
     from datetime import datetime
 
     try:
@@ -71,7 +97,256 @@ def _now_local() -> str:
         from datetime import timedelta, timezone
 
         tz = timezone(timedelta(hours=8))
-    return datetime.now(tz).replace(tzinfo=None).isoformat(timespec="seconds")
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip())
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(tz)
+    return parsed.date()
+
+
+_CN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def _chinese_number(value) -> Optional[int]:
+    """把 "3" / "三" / "十一" / "二十三" 解析成整数；无法解析返回 None。"""
+
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    if "十" in text:
+        head, _, tail = text.partition("十")
+        tens = 1 if head == "" else _CN_DIGITS.get(head)
+        ones = 0 if tail == "" else _CN_DIGITS.get(tail)
+        if tens is None or ones is None:
+            return None
+        return tens * 10 + ones
+    if len(text) == 1 and text in _CN_DIGITS:
+        return _CN_DIGITS[text]
+    return None
+
+
+def _bj_tz():
+    """北京时间（UTC+08:00）；Windows 缺 tzdata 时回退固定偏移。"""
+
+    from datetime import timedelta, timezone
+
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo("Asia/Shanghai")
+    except Exception:  # noqa: BLE001
+        return timezone(timedelta(hours=8))
+
+
+#: 时段词分组：同一时段对"十二点"的解释不同，必须分开处理。
+_AM_WORDS = ("凌晨", "清晨", "早上", "上午", "半夜")
+_NOON_WORDS = ("中午",)
+_PM_WORDS = ("下午", "傍晚")
+_NIGHT_WORDS = ("晚上", "今晚", "夜里")
+
+
+def _apply_day_part(hour: Optional[int], text: str) -> tuple[Optional[int], int]:
+    """把时段词换算成 `(24 小时制时钟, 跨天数)`。
+
+    边界约定（写进文档，不静默指到午夜）：
+    - 中午十二点 = 12:00；下午/傍晚十二点 = 12:00；
+    - 晚上/今晚/夜里十二点 = **次日** 00:00（跨一天，用 day_offset 表达）；
+    - 凌晨/半夜十二点 = 00:00（当天零点）；
+    - 上午十二点存在用语歧义，按 12:00（正午）处理，**不**指到午夜。
+    """
+
+    if hour is None:
+        return None, 0
+    value = text or ""
+    if any(word in value for word in _NIGHT_WORDS):
+        if hour == 12:
+            return 0, 1
+        return (hour + 12 if hour < 12 else hour), 0
+    if any(word in value for word in _PM_WORDS):
+        if hour == 12:
+            return 12, 0
+        return (hour + 12 if hour < 12 else hour), 0
+    if any(word in value for word in _NOON_WORDS):
+        if hour == 12:
+            return 12, 0
+        return (hour + 12 if hour < 6 else hour), 0
+    if any(word in value for word in _AM_WORDS):
+        if hour == 12:
+            return (0, 0) if any(
+                word in value for word in ("凌晨", "半夜")
+            ) else (12, 0)
+        return hour, 0
+    return hour, 0
+
+
+def _normalise_event_time(raw: str, source_occurred_at: str) -> tuple[str, str]:
+    """把时间说法规范化成 `(occurred_at, planned_at)`（北京时间）；不确定就留空。
+
+    - 绝对日期（2026-11-25 / 2026/11/25 / 11月25日）先解析校验，非法一律丢弃；
+    - "明天下午三点"这类相对说法结合**来源原话发生时间**换算，并处理
+      上午/下午/中午/晚上/凌晨等时段词，不再把下午三点算成 03:00；
+    - 已发生的写 `occurred_at`，将来的安排写 `planned_at`，都保留明确钟点，
+      ISO8601 明确带 `+08:00`；
+    - 只有日期没有钟点时保留日期（不编造 00:00 的钟点）；
+    - 解析不出就两个都留空（调用方保留 unknown），不截字符串当日期。
+    """
+
+    from datetime import date, datetime, timedelta
+
+    text = str(raw or "").strip()
+    if not text:
+        return "", ""
+    matches = re.findall(
+        r"(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})", text
+    )
+    if not matches:
+        # "11月25日"（无年份）按来源年份补全，避免整条时间丢失。
+        partial = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]", text)
+        base_date = _source_date(source_occurred_at)
+        if partial and base_date is not None:
+            matches = [(str(base_date.year), partial.group(1), partial.group(2))]
+    absolute = None
+    for year, month, day in matches:
+        try:
+            absolute = date(int(year), int(month), int(day))
+        except ValueError:
+            continue
+        break
+    base = _source_date(source_occurred_at)
+    relative = None
+    for word, delta in _RELATIVE_DAYS:
+        if word in text:
+            if base is not None:
+                relative = base + timedelta(days=delta)
+            break
+    clock = re.search(
+        r"(\d{1,2}|[一二两三四五六七八九十]{1,3})\s*[点:：]\s*(\d{1,2}|[一二三四五六七八九十]{1,2})?",
+        text,
+    )
+    hour = minute = None
+    if clock:
+        hour = _chinese_number(clock.group(1))
+        minute = _chinese_number(clock.group(2)) if clock.group(2) else 0
+        if hour is None or minute is None or not (0 <= hour <= 23 and 0 <= minute <= 59):
+            hour = minute = None
+    hour, day_offset = _apply_day_part(hour, text)
+    if relative is None and absolute is None and hour is None:
+        return "", ""
+    target = absolute or relative or base
+    if target is None:
+        return "", ""
+
+    tz = _bj_tz()
+    now = datetime.now(tz)
+    if hour is None:
+        # 只有日期：不补 00:00 的假钟点，按日期与"今天"比较决定发生/计划。
+        if target > now.date():
+            return "", target.isoformat()
+        return target.isoformat(), ""
+
+    moment = datetime(
+        target.year, target.month, target.day, int(hour), int(minute or 0), tzinfo=tz
+    )
+    if day_offset:
+        moment = moment + timedelta(days=day_offset)
+    if moment > now:
+        return "", moment.isoformat(timespec="minutes")
+    return moment.isoformat(timespec="minutes"), ""
+
+
+def _date_literal_supported(value: str, evidence: str) -> bool:
+    """模型给的日期是否能在这条原文/引用里找到字面依据。
+
+    "能 parse" 不等于"有来源"：模型不能凭自己编一个合法日期就改写事件时间。
+    """
+
+    text = str(value or "")
+    haystack = str(evidence or "")
+    if not text or not haystack:
+        return False
+    full = re.findall(r"(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})", text)
+    for year, month, day in full:
+        if f"{int(month)}月{int(day)}日" in haystack or f"{int(month)}月{int(day)}号" in haystack:
+            continue
+        if f"{month}月{day}" in haystack.replace("-", "月").replace("/", "月"):
+            continue
+        if f"{month}/{day}" in haystack or f"{month}-{day}" in haystack:
+            continue
+        return False
+    partial = re.findall(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]", text)
+    for month, day in partial:
+        if f"{month}月{day}" not in haystack:
+            return False
+    return bool(full or partial)
+
+
+#: 否定词：detail 与证据的极性必须一致，不能把"不去"写成"去"。
+_NEGATIONS = "不没未别勿"
+
+
+def _detail_supported(detail: str, evidence: str) -> bool:
+    """detail 的**全部**信息点都要能在证据里字面找到（保守）。
+
+    相似度（如二元组 60% 覆盖）不能证明地点、人数、对象、动作、否定正确：
+    "明天下午三点在图书馆集合" → detail "…在体育馆集合" 只差两个字却是另一件事。
+    因此这里要求 detail 的每一个中文二元组、数字、英文词都在证据里出现；
+    不满足就由调用方回退到逐字 quote。
+    """
+
+    text = str(detail or "")
+    haystack = str(evidence or "")
+    if not text or not haystack:
+        return False
+    for token in re.findall(r"[0-9]+|[A-Za-z_]{2,}", text):
+        if token not in haystack:
+            return False
+    for char in set(text) & set(_NEGATIONS):
+        if char not in haystack:
+            return False
+    grams = [
+        text[index:index + 2]
+        for index in range(len(text) - 1)
+        if all("\u4e00" <= char <= "\u9fff" for char in text[index:index + 2])
+    ]
+    if not grams:
+        return True
+    return all(gram in haystack for gram in grams)
+
+
+def _title_supported(title: str, evidence: str) -> bool:
+    """标题不得引入证据里没有的字（典型：地点/人数被换掉）。
+
+    字符必须全部出现，且中文二元组至少一半能在证据里找到；否则调用方回退到
+    原话片段。字符集检查能拦住"体育馆"这种换了地点的改写。
+    """
+
+    text = str(title or "")
+    haystack = str(evidence or "")
+    if not text or not haystack:
+        return False
+    if any(char not in haystack for char in text if "\u4e00" <= char <= "\u9fff"):
+        return False
+    for char in set(text) & set(_NEGATIONS):
+        if char not in haystack:
+            return False
+    grams = [
+        text[index:index + 2]
+        for index in range(len(text) - 1)
+        if all("\u4e00" <= char <= "\u9fff" for char in text[index:index + 2])
+    ]
+    if not grams:
+        return True
+    hit = sum(1 for gram in grams if gram in haystack)
+    return hit / len(grams) >= 0.5
 
 
 class ChatMemoryService:
@@ -96,6 +371,8 @@ class ChatMemoryService:
             "facts_replaced": 0,
             "facts_blocked": 0,
             "events_blocked": 0,
+            "events_detail_reduced": 0,
+            "events_title_reduced": 0,
             "events_scans": 0,
             "events_written": 0,
             "events_failed": 0,
@@ -133,8 +410,19 @@ class ChatMemoryService:
                 "trigger": "l2_archive_committed",
                 "max_facts_per_archive": 3,
                 "enabled": bool(memory.l3_enabled),
+                # 事实只随 L2 归档成功写入，没有独立扫描任务。
+                "mode": "l2_archive_derived",
+                "independent_scan": False,
             },
-            "events": {"enabled": bool(memory.l3_enabled), "independent_cursor": True},
+            # 事件与事实来自**同一次** L2 归档请求；旧的独立事件游标任务已退役。
+            "events": {
+                "enabled": bool(getattr(memory, "events_enabled", True)),
+                "source": "l2_archive_request",
+                "mode": "l2_archive_derived",
+                "independent_cursor": False,
+                "independent_scan": False,
+                "retired_independent_task": True,
+            },
             "counters": dict(self._counters),
         }
 
@@ -166,8 +454,13 @@ class ChatMemoryService:
             self._counters[f"{kind}_blocked"] = self._counters.get(f'{kind}_blocked',0)+1
             return 0
         next_at = str(task.get("next_allowed_at") or "")
-        if next_at and next_at > _now_local():
-            return 0
+        if next_at:
+            # 退避时间按**绝对时刻**比较（旧数据可能是 Z 或 +08:00 混排，
+            # 字符串字典序会把"稍后可重试"判成"还要等"）。
+            from pero.core import timebase
+
+            if timebase.later_than(next_at, timebase.now()):
+                return 0
         token=_ERRORS.set({})
         written=0
         try:
@@ -233,18 +526,15 @@ class ChatMemoryService:
             return result
         before_calls = self._counters["llm_calls"]
         if provider is not None:
-            # L2 独立交互归档（条数触发）；与原始聊天归档彼此独立。
+            # 唯一常规归档：L2 交互归档（摘要 + 事实 + 事件同一次请求）。
+            # 原始全群摘要与独立事件循环已退役，不再默认调用。
             result["l2"] = await self.maybe_archive_l2(
                 agent_id=agent_id, conversation_id=conversation_id,
                 memory=memory, provider=provider, force=force,
             )
-            result["archive"] = await self._guarded(memory=memory,agent_id=agent_id,conversation_id=conversation_id,kind='archive',provider=provider,force=force,scanner=self.maybe_archive)
+            result["archive"] = None
             result["facts"] = int((result.get("l2") or {}).get("facts_written") or 0)
-            result["events"] = await self._guarded(
-                memory=memory, agent_id=agent_id, conversation_id=conversation_id,
-                kind="events", provider=provider, force=force,
-                scanner=self.scan_events,
-            )
+            result["events"] = int((result.get("l2") or {}).get("events_written") or 0)
         result["llm_calls"] = self._counters["llm_calls"] - before_calls
         try:
             counts = await memory.chat_counts(
@@ -254,11 +544,9 @@ class ChatMemoryService:
                 agent_id=agent_id, conversation_id=conversation_id, kind="event"
             )
             result["last_seq"] = int(counts["last_seq"])
-            if self._settings.memory.l3_enabled:
-                # L3 no longer has an independent cursor to wait on.
-                result["processed_seq"] = event_cursor
-            else:
-                result["processed_seq"] = int(counts["last_seq"])
+            # 后台只按 L2 交互条数调度；没有需要按 seq 追赶的独立任务。
+            result["processed_seq"] = int(counts["last_seq"])
+            _ = event_cursor
         except Exception:  # noqa: BLE001
             pass
         return result
@@ -483,9 +771,20 @@ class ChatMemoryService:
                 payload_parts.append("此前已确认前情：\n" + str(previous["content"]))
             payload_parts.append("本批新增交互原文：\n" + "\n".join(lines))
             archive_facts=[]
+            archive_events=[]
+            # 事实与事件是两个独立开关：只关 L3 时仍然提取事件（不额外请求模型）。
+            want_facts = bool(self._settings.memory.l3_enabled)
+            want_events = bool(
+                getattr(self._settings.memory, "events_enabled", True)
+            )
             try:
-                if self._settings.memory.l3_enabled:
-                    summary,archive_facts=await self._summarise_l2_with_facts(provider,"\n\n".join(payload_parts),kept)
+                if want_facts or want_events:
+                    summary, archive_facts, archive_events = (
+                        await self._summarise_l2_with_facts(
+                            provider, "\n\n".join(payload_parts), kept,
+                            want_facts=want_facts, want_events=want_events,
+                        )
+                    )
                 else:
                     summary = await self._summarise_l2(provider, "\n\n".join(payload_parts))
             except asyncio.CancelledError:
@@ -510,6 +809,10 @@ class ChatMemoryService:
                     interaction_count=len(kept),
                     event_ids=[str(item.get("event_id") or "") for item in kept],
                     previous_archive_id=str(previous.get("archive_id") or ""),
+                    # 派生输出与摘要同事务提交：任一步失败整体回滚，不会出现
+                    # "摘要已归档、L3/事件写失败且无法恢复"的窗口。
+                    facts=archive_facts,
+                    events=archive_events,
                 )
             except asyncio.CancelledError:
                 await self._settle_l2_safely(
@@ -526,10 +829,11 @@ class ChatMemoryService:
                                conversation_id, exc)
                 return None
             except Exception as exc:  # noqa: BLE001
-                committed = False
+                committed = None
                 logger.warning("L2 archive commit failed cid=%s error=%s",
                                conversation_id, type(exc).__name__)
-            if not committed:
+            ok = bool(committed.get("ok")) if isinstance(committed, dict) else False
+            if not ok:
                 self._counters["l2_failed"] += 1
                 await self._settle_l2_safely(
                     memory, archive_id, agent_id, "failed", "commit_rejected"
@@ -537,18 +841,14 @@ class ChatMemoryService:
                 return None
             self._counters["l2_completed"] += 1
             self._counters["l2_interactions_archived"] += len(kept)
-            facts_written=0
-            if archive_facts:
-                try:
-                    facts_written=await memory.l3_from_archive(agent_id=agent_id,conversation_id=conversation_id,
-                        archive_id=archive_id,facts=archive_facts)
-                    self._counters['facts_written']+=facts_written
-                except asyncio.CancelledError:raise
-                except Exception as exc:
-                    self._counters['facts_failed']+=1
-                    logger.warning('archive_l3_write_failed type=%s',type(exc).__name__)
+            facts_written = int(committed.get("facts_written") or 0)
+            events_written = int(committed.get("events_written") or 0)
+            self._counters['facts_written'] += facts_written
+            self._counters['events_written'] += events_written
+            self._counters['events_blocked'] += max(0, len(archive_events) - events_written)
             return {
                 "facts_written":facts_written,
+                "events_written":events_written,
                 "archive_id": archive_id,
                 "interactions": len(kept),
                 "planned": len(plan.get("items") or []),
@@ -578,8 +878,14 @@ class ChatMemoryService:
             raise ValueError("empty_summary")
         return text
 
-    async def _summarise_l2_with_facts(self,provider,payload,items):
-        """One paid request per archive; member evidence and summary stay separate."""
+    async def _summarise_l2_with_facts(self,provider,payload,items,
+                                       want_facts: bool = True,
+                                       want_events: bool = True):
+        """One paid request per archive; member evidence and summary stay separate.
+
+        `want_facts` / `want_events` 由两个独立配置决定：关闭 L3 不影响事件，
+        关闭事件也不影响事实；被关闭的那类输出直接丢弃，不落库。
+        """
         sources={str(item.get('event_id')):item for item in items
                  if item.get('role')=='member' and item.get('kind','text')=='text'
                  and str(item.get('text') or '').strip() and not str(item.get('text')).lstrip().startswith('[')}
@@ -589,7 +895,13 @@ class ChatMemoryService:
             '不得把前情摘要当作新证据；每条只能归属于该条原文说话者本人。'
             '输出JSON：{"summary":"...","facts":[{"source_event_id":"本批原话事件ID",'
             '"category":"name|stable_preference|personal_background|long_term_habit","content":"清楚独立的长期事实短句",'
-            '"quote":"原话逐字片段"}]}。')
+            '"quote":"原话逐字片段"}],'
+            '"events":[{"source_event_id":"本批原话事件ID","title":"20字内",'
+            '"detail":"100字内","status":"planned|ongoing|done",'
+            '"quote":"该条原话逐字片段","occurred_at":"原文明确日期或空"}]}。'
+            '事件最多2条，可为空数组；宁缺不凑。只登记可复述的约定、安排、截止、活动；'
+            '不把寒暄、玩笑、偏好、发送图片文件、单次游戏、投递状态或助手自述当事件。'
+            '没有逐字原话证据就不要输出事件；日期不确定就留空，不得编造日期。')
         request=ModelRequest(purpose=ModelPurpose.CONVERSATION_SUMMARY,messages=(
             ModelMessage(role=MessageRole.SYSTEM,content=policy),
             ModelMessage(role=MessageRole.USER,content=json.dumps({'context':payload,'eligible_member_source_ids':list(sources)},ensure_ascii=False))),tools=())
@@ -601,7 +913,7 @@ class ChatMemoryService:
         rows=data.get('facts',[]);facts=[]
         transient=re.compile(r'发送.{0,8}(图片|照片|文件|表情)|发了.{0,6}(图|文件|表情)|睡了|睡觉|熬夜|晚安|早安|现在|刚刚|今天|今晚|昨天|心情|困了|饿了|\[.*(?:图片|表情|文件)')
         categories={'name','stable_preference','personal_background','long_term_habit'}
-        if isinstance(rows,list):
+        if isinstance(rows,list) and want_facts:
             for row in rows[:3]:
                 if not isinstance(row,dict):continue
                 source=sources.get(str(row.get('source_event_id') or ''))
@@ -610,7 +922,65 @@ class ChatMemoryService:
                 if quote not in source['text'] or transient.search(content+' '+quote):continue
                 if any(item['content']==content for item in facts):continue
                 facts.append({'source_event_id':str(source['event_id']),'content':content,'quote':quote,'category':row['category']})
-        return summary,facts
+        events=[]
+        raw_events=data.get('events',[])
+        if isinstance(raw_events,list) and want_events:
+            for row in raw_events[:2]:
+                if not isinstance(row,dict):continue
+                source=sources.get(str(row.get('source_event_id') or ''))
+                if not source:continue
+                title=str(row.get('title') or '').strip()
+                detail=str(row.get('detail') or '').strip()
+                quote=str(row.get('quote') or '').strip()
+                status=str(row.get('status') or 'ongoing').lower()
+                if not 4<=len(title)<=40 or not 4<=len(detail)<=200:continue
+                # 证据：逐字 quote 必须出现在本条来源原话里。来源 ID 合法只证明引用
+                # 存在，不能证明 detail 为真；没有 quote 的事件一律不接受。
+                if not 4<=len(quote)<=160 or quote not in str(source.get('text') or ''):
+                    self._counters['events_blocked']+=1
+                    continue
+                # 类别边界：偏好、寒暄、媒体行为不是事件；只有可复述的安排/约定/活动。
+                if _is_non_event_wording(title+' '+detail):
+                    self._counters['events_blocked']+=1
+                    continue
+                if not _has_event_cue(title+' '+detail+' '+quote):
+                    self._counters['events_blocked']+=1
+                    continue
+                # 标题与证据至少要有实际重合，防止"引用一句无关原话 + 另编一件事"。
+                if sum(1 for char in set(title) if char.isalnum() and char in quote)<2:
+                    self._counters['events_blocked']+=1
+                    continue
+                source_text = str(source.get('text') or '')
+                evidence = quote + source_text
+                # 标题不能新增证据里没有的字（地点/人物/人数被换掉就回退到原话片段）。
+                if not _title_supported(title, evidence):
+                    title = (quote or title)[:20]
+                    self._counters['events_title_reduced'] += 1
+                # detail 必须是证据能逐字复述的内容；任何新增的关键内容都不放行，
+                # 直接回退到逐字 quote，而不是"大部分相似就算通过"。
+                if not _detail_supported(detail, evidence):
+                    detail = (quote or detail)[:200]
+                    self._counters['events_detail_reduced'] += 1
+                if status not in {'planned','ongoing','done'}:status='ongoing'
+                # 时间以**原话**为准；模型给的日期只有在引用/原文里有字面依据时才采信。
+                occurred_at, planned_at = _normalise_event_time(
+                    quote or detail, str(source.get('occurred_at') or ''),
+                )
+                if not (occurred_at or planned_at):
+                    model_time = str(row.get('occurred_at') or '') or str(
+                        row.get('planned_at') or ''
+                    )
+                    if model_time and _date_literal_supported(
+                        model_time, quote + source_text
+                    ):
+                        occurred_at, planned_at = _normalise_event_time(
+                            model_time, str(source.get('occurred_at') or ''),
+                        )
+                if any(item['title']==title for item in events):continue
+                events.append({'source_event_id':str(source['event_id']),'title':title,
+                               'detail':detail,'status':status,'quote':quote,
+                               'occurred_at':occurred_at,'planned_at':planned_at})
+        return summary,facts,events
 
     async def _settle_l2_safely(self, memory, archive_id: str, agent_id: str,
                                 state: str, error_code: str) -> None:

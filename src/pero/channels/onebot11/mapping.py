@@ -81,10 +81,12 @@ def _iso_from_unix(value: Any) -> Optional[str]:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        try:
-            return datetime.fromtimestamp(float(value), timezone.utc).isoformat()
-        except (OverflowError, OSError, ValueError):
-            return None
+        # 这是桥（OneBot）给的**外部事件时刻**（Unix 秒）；绝对时刻不变，
+        # 落业务库时统一写成北京时间 +08:00，避免与其它业务时间混用两种文本形态。
+        from pero.core.timebase import format_iso
+
+        stamp = format_iso(float(value), timespec="seconds")
+        return stamp or None
     if isinstance(value, str) and value.isdigit():
         return _iso_from_unix(int(value))
     return None

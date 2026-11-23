@@ -30,7 +30,8 @@ class CommandState:
     def key(self,agent,cid):return agent+'|'+cid
     def cutoff(self,agent,cid):return self.boundaries.get(self.key(agent,cid))
     def reset(self,agent,cid):
-        value=datetime.now(timezone.utc).isoformat()
+        from pero.core.timebase import now_iso
+        value=now_iso()
         candidate={**self.boundaries,self.key(agent,cid):value}
         self.path.parent.mkdir(parents=True,exist_ok=True)
         tmp=self.path.with_suffix('.tmp');tmp.write_text(json.dumps(candidate),encoding='utf-8');tmp.replace(self.path)
@@ -91,12 +92,39 @@ def clear_buffers(owner,agent,cid):
     return count
 
 
-def clear_model_history(owner,agent,cid):
+class _NoGate:
+    async def __aenter__(self):return None
+    async def __aexit__(self,*exc):return False
+
+
+_NO_GATE=_NoGate()
+
+
+def gate(owner,cid):
+    """清理侧与插件回报提交段共用的串行边界；宿主无此接口时退化为无锁。"""
+
+    acquire=getattr(owner,'conversation_gate',None)
+    return acquire(cid) if callable(acquire) else _NO_GATE
+
+
+def clear_model_history(owner,agent,cid,*,mark=True):
     session=owner._sessions_by_conversation.get(cid)
     if session is not None:session.history.clear()
     for name in ('_last_reply','_last_question','_last_senders'):
         getattr(owner,name,{}).pop(cid,None)
     owner._archive_revisions.pop((agent,cid),None)
+    # 清理切点：早于此刻提交的后台任务，回报时不得把结果写回已清空的会话。
+    if mark:
+        marker=getattr(owner,'mark_conversation_cleared',None)
+        if callable(marker):marker(agent,cid)
+    # 本轮装载缓存同样要清：否则清理后仍会显示旧的 L2/背景/检索快照。
+    # 注意：`_plugin_usage`（费用）与 `_cleared_at`（切点）**保留**——它们是
+    # 计量与安全证据，不属于"会话记忆内容"。
+    for name in ('_l2_event_ids','_l10_event_ids','_l2_last_load',
+                 '_bystander_last','_retrieval_last','_usage_last'):
+        bucket=getattr(owner,name,None)
+        if isinstance(bucket,dict):
+            bucket.pop((agent,cid),None)
 
 
 async def mutate_memory(memory,agent,cid,layer):
@@ -110,7 +138,13 @@ async def mutate_memory(memory,agent,cid,layer):
                 return cur.rowcount
             total=cur.execute('SELECT COUNT(*) FROM raw_message WHERE agent_id=? AND conversation_id=?',scope).fetchone()[0]
             cur.execute('DELETE FROM archive_task_source WHERE agent_id=? AND task_id IN (SELECT task_id FROM archive_task WHERE agent_id=? AND conversation_id=?)',(agent,agent,cid))
-            for table in ('archive_task','vector_chunk','l3_fact','l4_memory','event_journal','l2_turn','raw_message','agent_session'):
+            # 清理必须覆盖现行的群聊记忆表（chat_event/l2_interaction/l2_archive/
+            # memory_event），否则清空后旧交互仍会被 L2 计数、检索与事件读到。
+            for table in ('archive_task','vector_chunk','l3_fact','l3_fact_history',
+                          'l4_memory','event_journal','l2_turn','raw_message',
+                          'agent_session','l2_interaction','l2_archive','memory_event',
+                          'memory_event_history','chat_event','chat_cursor',
+                          'chat_archive','chat_task'):
                 cur.execute(f'DELETE FROM {table} WHERE agent_id=? AND conversation_id=?',scope)
             return total
     return await memory._write(execute)
@@ -202,15 +236,23 @@ async def execute(owner,message,route,binding,name,args):
             n=clear_buffers(owner,agent,cid)
             await reply(binding,message,f'已清空本群 L1/L10（{n} 条）并休眠；长期记忆保留。');return
         if name=='gareset':
-            state(owner).reset(agent,cid);clear_model_history(owner,agent,cid)
+            # 串行边界：切点失效与插件回报提交段互斥，回执发出后旧任务必然看到新代数。
+            async with gate(owner,cid):
+                state(owner).reset(agent,cid);clear_model_history(owner,agent,cid)
             await reply(binding,message,'已重置本群 L2 对话起点，后续不回放之前的多轮上下文。原文、L3/L4 保留，可明确查询。');return
         archive=getattr(owner,'_archive_service',None)
-        if archive is not None:
-            async with archive._guard:n=await mutate_memory(memory,agent,cid,'L3' if name=='gaforget' else 'L4' if name=='gakbforget' else 'all')
-        else:n=await mutate_memory(memory,agent,cid,'L3' if name=='gaforget' else 'L4' if name=='gakbforget' else 'all')
-        clear_model_history(owner,agent,cid)
+        # 删数据同样在边界内：先标记代数失效，再删，最后才回复完成；
+        # 期间不允许旧任务“边删边回填”。
+        async with gate(owner,cid):
+            mark=getattr(owner,'mark_conversation_cleared',None)
+            if callable(mark):mark(agent,cid)
+            if archive is not None:
+                async with archive._guard:n=await mutate_memory(memory,agent,cid,'L3' if name=='gaforget' else 'L4' if name=='gakbforget' else 'all')
+            else:n=await mutate_memory(memory,agent,cid,'L3' if name=='gaforget' else 'L4' if name=='gakbforget' else 'all')
+            clear_model_history(owner,agent,cid,mark=False)
+            if name=='gamemorypurge':
+                clear_buffers(owner,agent,cid);state(owner).reset(agent,cid)
         if name=='gamemorypurge':
-            clear_buffers(owner,agent,cid);state(owner).reset(agent,cid)
             await reply(binding,message,f'已清除本群原文、事项、日记、L20和长期记忆（原文 {n} 条）；其他群、图片和表情资产不受影响。')
         else:await reply(binding,message,f'已清空本群 {"L3 人物事实" if name=="gaforget" else "L4 长期知识"}（{n} 条）；原文与其他层保留。')
         return

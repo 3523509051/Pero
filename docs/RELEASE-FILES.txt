@@ -1,6 +1,6 @@
-Source publication file list (2026-11-23; L3 archive-only update)
+Source publication file list (2026-11-23; converged memory and SDK)
 Repository: pero
-Files: 223
+Files: 227
 
 .env.example
 .gitignore
@@ -38,6 +38,7 @@ docs/local-launcher.md
 docs/plugin-sdk-v1-general.md
 docs/pre-push-review-2026-11-22-2009.md
 docs/pre-push-review-2026-11-22-2151.md
+docs/pre-push-review-2026-11-23-2200.md
 docs/pre-push-review-2026-11-23-l3-archive.md
 docs/project-engineering.md
 docs/wechat-combination.md
@@ -106,6 +107,7 @@ src/pero/agent/private_decision.py
 src/pero/agent/private_judge.py
 src/pero/agent/private_policy.py
 src/pero/agent/reply_mentions.py
+src/pero/agent/retrieval_plan.py
 src/pero/agent/sessions.py
 src/pero/agent/sticker_marker.py
 src/pero/agent/tool_analysis.py
@@ -141,8 +143,10 @@ src/pero/configuration/prompt_files.py
 src/pero/configuration/view.py
 src/pero/core/__init__.py
 src/pero/core/contracts.py
+src/pero/core/logging_setup.py
 src/pero/core/message_content.py
 src/pero/core/settings.py
+src/pero/core/timebase.py
 src/pero/knowledge/__init__.py
 src/pero/knowledge/ollama.py
 src/pero/knowledge/parsers.py

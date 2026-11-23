@@ -209,7 +209,9 @@ class ProviderChatRequest:
         self._request_id = request_id.strip()
         self._purpose = purpose
         self._body = body
-        self._created_at = created_at or datetime.now(timezone.utc).isoformat()
+        from pero.core.timebase import now_iso as _now_iso
+
+        self._created_at = created_at or _now_iso()
 
     # ------------------------------------------------------------------ #
     # 只读属性

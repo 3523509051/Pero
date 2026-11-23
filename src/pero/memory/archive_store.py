@@ -10,7 +10,9 @@ from pero.memory.models import StoredTurn, HistoryLoad
 
 
 def _now():
-    return datetime.now(timezone.utc).isoformat()
+    from pero.core.timebase import now_iso
+
+    return now_iso()
 
 
 def _digest(value):
@@ -63,7 +65,7 @@ class ArchiveStoreMixin:
                 return None
             recent = cur.execute(
                 "SELECT created_at,turn_id FROM l2_turn WHERE agent_id=? AND conversation_id=? "
-                "ORDER BY created_at DESC,turn_id DESC LIMIT 1 OFFSET ?",
+                "ORDER BY bj_epoch(created_at) DESC,turn_id DESC LIMIT 1 OFFSET ?",
                 (agent_id, conversation_id, max(int(retain_turns)-1, 0))).fetchone()
             if recent is None:
                 return None
@@ -71,7 +73,7 @@ class ArchiveStoreMixin:
                 "SELECT turn_id,status FROM l2_turn t WHERE agent_id=? AND conversation_id=? "
                 "AND (created_at,turn_id)<(?,?) AND NOT EXISTS(SELECT 1 FROM archive_task_source s "
                 "WHERE s.agent_id=t.agent_id AND s.turn_id=t.turn_id) "
-                "ORDER BY created_at,turn_id LIMIT ?",
+                "ORDER BY bj_epoch(created_at),turn_id LIMIT ?",
                 (agent_id, conversation_id, recent['created_at'], recent['turn_id'], min(max_turns, 128))).fetchall()
             ids, selected, input_text = [], [], ''
             oversized = False
@@ -191,7 +193,7 @@ class ArchiveStoreMixin:
             params=[agent_id,conversation_id]
             if excluded:
                 sql+=' AND turn_id NOT IN ('+','.join('?' for _ in excluded)+')';params+=excluded
-            rows=cur.execute(sql+' ORDER BY created_at DESC,turn_id DESC LIMIT ?',params+[min(turn_limit,128)]).fetchall()
+            rows=cur.execute(sql+' ORDER BY bj_epoch(created_at) DESC,turn_id DESC LIMIT ?',params+[min(turn_limit,128)]).fetchall()
             evidence=self._evidence_for_turns(cur,[r['turn_id'] for r in rows],evidence_per_turn)
             turns=[]
             for row in rows:

@@ -45,9 +45,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.log_level:
         settings.service.log_level = args.log_level.lower()
 
-    logging.basicConfig(
-        level=getattr(logging, settings.service.log_level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    from pero.core.logging_setup import configure as configure_logging
+
+    # 日志时间统一北京时间并带 +0800，不依赖服务器本地时区。
+    configure_logging(
+        getattr(logging, settings.service.log_level.upper(), logging.INFO)
     )
 
     runtime = build_runtime(settings)

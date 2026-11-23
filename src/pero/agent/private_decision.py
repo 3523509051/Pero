@@ -121,7 +121,9 @@ class PrivateChatDecisionEngine:
         # 格式化消息
         messages_text = []
         for msg in batch.messages[-10:]:  # 最多看最近10条
-            time_str = msg.received_at or datetime.now(timezone.utc).isoformat()
+            from pero.core.timebase import now_iso as _now_iso
+
+            time_str = msg.received_at or _now_iso()
             text = (msg.text or "").strip()
             if not text and msg.attachments:
                 text = f"[{len(msg.attachments)}个附件]"

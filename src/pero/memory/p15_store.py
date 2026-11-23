@@ -39,9 +39,11 @@ def _fact_id() -> str:
 
 
 def _now() -> str:
-    from datetime import datetime, timezone
+    """业务时间统一北京时间（aware，明确 +08:00）。"""
 
-    return datetime.now(timezone.utc).isoformat()
+    from pero.core.timebase import now_iso
+
+    return now_iso()
 
 
 def _chunk_id() -> str:
@@ -145,7 +147,7 @@ class P15StoreMixin:
                 params.append(cursor)
             rows = self._conn.execute(
                 "SELECT * FROM agent_session WHERE agent_id=" + "?" + clause
-                + " ORDER BY updated_at DESC, session_id DESC LIMIT ?",
+                + " ORDER BY bj_epoch(updated_at) DESC, session_id DESC LIMIT ?",
                 [*params, limit],
             ).fetchall()
         items = [self._session_row(row) for row in rows]
@@ -200,11 +202,18 @@ class P15StoreMixin:
             clause = ""
             if cursor:
                 at, _, turn = (cursor.partition("|"))
-                clause = " AND (t.created_at > ? OR (t.created_at = ? AND t.turn_id > ?))"
-                params.extend([at, at, turn])
+                from pero.core.timebase import require_epoch
+
+                bound = require_epoch(at, "cursor")
+                clause = (
+                    " AND (bj_epoch(t.created_at) > ?"
+                    " OR (bj_epoch(t.created_at) = ? AND t.turn_id > ?))"
+                )
+                params.extend([bound, bound, turn])
             rows = self._conn.execute(
                 "SELECT t.* FROM l2_turn t WHERE t.agent_id=? AND t.conversation_id=?"
-                + clause + " ORDER BY t.created_at ASC, t.turn_id ASC LIMIT ?",
+                + clause
+                + " ORDER BY bj_epoch(t.created_at) ASC, t.turn_id ASC LIMIT ?",
                 [*params, limit],
             ).fetchall()
             items: List[Dict[str, Any]] = []
@@ -282,7 +291,7 @@ class P15StoreMixin:
                 " t.assistant_text, d.status AS delivery_status"
                 " FROM l2_turn t LEFT JOIN delivery_record d ON d.turn_id=t.turn_id"
                 " WHERE t.agent_id=? AND t.conversation_id=?"
-                " ORDER BY t.created_at ASC, t.turn_id ASC LIMIT ?",
+                " ORDER BY bj_epoch(t.created_at) ASC, t.turn_id ASC LIMIT ?",
                 (agent_id, conversation_id, max(1, min(int(limit), 500))),
             ).fetchall()
         return [
@@ -335,7 +344,7 @@ class P15StoreMixin:
                 " FROM identity i WHERE i.identity_id IN"
                 " (SELECT DISTINCT sender_identity_id FROM raw_message"
                 "  WHERE agent_id=? AND sender_identity_id IS NOT NULL)"
-                + clause + " ORDER BY i.updated_at DESC, i.identity_id DESC LIMIT ?",
+                + clause + " ORDER BY bj_epoch(i.updated_at) DESC, i.identity_id DESC LIMIT ?",
                 [agent_id, agent_id, agent_id, *cursor_param, int(limit)],
             ).fetchall()
         items = [
@@ -497,7 +506,7 @@ class P15StoreMixin:
                 params.append(cursor)
             rows = self._conn.execute(
                 "SELECT * FROM l3_fact WHERE agent_id=?" + scope + clause
-                + " ORDER BY updated_at DESC, fact_id DESC LIMIT ?",
+                + " ORDER BY bj_epoch(updated_at) DESC, fact_id DESC LIMIT ?",
                 [*params, limit],
             ).fetchall()
         items = [self._l3_row(r, duplicate=False) for r in rows]
@@ -744,12 +753,14 @@ class P15StoreMixin:
             if identity_id:
                 where.append("identity_id=?")
                 params.append(identity_id)
+            if since or until:
+                from pero.core.timebase import require_epoch
             if since:
-                where.append("updated_at>=?")
-                params.append(since)
+                where.append("bj_epoch(updated_at)>=?")
+                params.append(require_epoch(since, "since"))
             if until:
-                where.append("updated_at<?")
-                params.append(until)
+                where.append("bj_epoch(updated_at)<?")
+                params.append(require_epoch(until, "until"))
             if keyword:
                 where.append("(content LIKE ? OR evidence_quote LIKE ?)")
                 like = f"%{keyword}%"
@@ -760,7 +771,7 @@ class P15StoreMixin:
                 " content, status, evidence_type, evidence_quote,"
                 " source_record_ids, occurred_at, extracted_at, updated_at"
                 " FROM l3_fact WHERE " + clause
-                + " ORDER BY updated_at DESC, fact_id DESC LIMIT ? OFFSET ?",
+                + " ORDER BY bj_epoch(updated_at) DESC, fact_id DESC LIMIT ? OFFSET ?",
                 [*params, limit, offset],
             ).fetchall()
             total = int(self._conn.execute(

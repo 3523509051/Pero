@@ -78,12 +78,12 @@ def _summarize_tool_outcome(outcome: ToolOutcome) -> Tuple[str, Sequence[str], b
 
     if name == "get_current_time":
         result = _parse_result(outcome.content)
-        stamp = str(result.get("utc_iso") or "").strip()
-        date = str(result.get("utc_date") or "").strip()
-        clock = str(result.get("clock") or "").strip()
-        parts = [part for part in (stamp, date, clock) if part]
+        stamp = str(result.get("beijing_iso") or "").strip()
+        date = str(result.get("beijing_date") or "").strip()
+        weekday = str(result.get("weekday") or "").strip()
+        parts = [part for part in (stamp, date, weekday) if part]
         detail = "，".join(parts) if parts else "未返回可读时间字段"
-        text, truncated = _clip(f"服务端 UTC 时间：{detail}")
+        text, truncated = _clip(f"北京时间：{detail}")
         return text, (), truncated
 
     if name in {"web_search", "read_website"}:
