@@ -1,15 +1,8 @@
 """聊天流水的长期记忆后台：归档、人物事实与事件条目（R02）。
 
-关键设计：
-- **三个独立任务/游标**：archive、l3（事实）、event（事件）。事件不依赖事实，
-  没有人物事实也照常整理；任一失败只影响自己的游标。
-- **触发区分**：`pending >= every`（条数）或 `force=True`（空闲/补跑）；
-  空闲能处理不足 20 条的连续区间；内部任务不会清掉真正未处理的 pending。
-- **失败不推进**：事实/事件扫描失败只保留已成功前缀，下一轮重试同一段。
-- **归档原子**：摘要 + L4 + completed + 游标 在单一事务；失败/中断不推进，
-  失败可恢复重试（attempts 上限 2），遗留 running 超时视为中断。
-- **真实调用次数**如实累计（`llm_calls`），不声称"一次调用共用结果"——
-  事实与事件是两次独立请求（各受预算与开关约束）。
+L3 只在 L2 压缩成功时积累，与摘要共用一次请求；最多三条长期事实，来源
+绑定本批成员原话。普通消息、空闲扫描和明确保存不再独立提取 L3。
+原始聊天归档与事件整理保持各自任务；L3 失败不回滚已完成的 L2 前情。
 """
 
 from __future__ import annotations
@@ -19,6 +12,7 @@ import hashlib
 import json
 import logging
 import uuid
+import re
 from contextvars import ContextVar
 _ERRORS=ContextVar('chat_scan_errors',default=None)
 from typing import Any, Dict, List, Optional
@@ -136,8 +130,8 @@ class ChatMemoryService:
                 "enabled": True,
             },
             "l3": {
-                "scan_every_messages": int(memory.l3_scan_every_messages),
-                "scan_idle_seconds": float(memory.l3_scan_idle_seconds),
+                "trigger": "l2_archive_committed",
+                "max_facts_per_archive": 3,
                 "enabled": bool(memory.l3_enabled),
             },
             "events": {"enabled": bool(memory.l3_enabled), "independent_cursor": True},
@@ -147,6 +141,8 @@ class ChatMemoryService:
     async def _guarded(self, *, memory, agent_id: str, conversation_id: str,
                        kind: str, provider, force: bool, scanner) -> int:
         """持久任务状态：失败退避、上限后需手动重试；新消息不能绕过失败区间。"""
+
+        if kind=='facts':return 0  # Retired independent job; only L2 archive may add L3.
 
         cursor_kind={'facts':'l3','events':'event','archive':'archive'}[kind]
         cursor = await memory.chat_cursor_get(
@@ -243,11 +239,7 @@ class ChatMemoryService:
                 memory=memory, provider=provider, force=force,
             )
             result["archive"] = await self._guarded(memory=memory,agent_id=agent_id,conversation_id=conversation_id,kind='archive',provider=provider,force=force,scanner=self.maybe_archive)
-            result["facts"] = await self._guarded(
-                memory=memory, agent_id=agent_id, conversation_id=conversation_id,
-                kind="facts", provider=provider, force=force,
-                scanner=self.scan_facts,
-            )
+            result["facts"] = int((result.get("l2") or {}).get("facts_written") or 0)
             result["events"] = await self._guarded(
                 memory=memory, agent_id=agent_id, conversation_id=conversation_id,
                 kind="events", provider=provider, force=force,
@@ -258,16 +250,13 @@ class ChatMemoryService:
             counts = await memory.chat_counts(
                 agent_id=agent_id, conversation_id=conversation_id
             )
-            facts_cursor = await memory.chat_cursor_get(
-                agent_id=agent_id, conversation_id=conversation_id, kind="l3"
-            )
             event_cursor = await memory.chat_cursor_get(
                 agent_id=agent_id, conversation_id=conversation_id, kind="event"
             )
             result["last_seq"] = int(counts["last_seq"])
             if self._settings.memory.l3_enabled:
-                # 两个游标都处理到才算 processed；未开启则视为已处理。
-                result["processed_seq"] = min(facts_cursor, event_cursor)
+                # L3 no longer has an independent cursor to wait on.
+                result["processed_seq"] = event_cursor
             else:
                 result["processed_seq"] = int(counts["last_seq"])
         except Exception:  # noqa: BLE001
@@ -327,7 +316,8 @@ class ChatMemoryService:
                 who = "大肥鱼" if item.get("role") == "assistant" else (
                     item.get("display_name") or item.get("sender_ref") or "成员"
                 )
-                line = f"[{str(item.get('occurred_at') or '')[:16]}] {who}：{item.get('text') or ''}"
+                source_label=(f" [source_event_id={item.get('event_id')}]" if self._settings.memory.l3_enabled and item.get('role')=='member' else '')
+                line = f"[{str(item.get('occurred_at') or '')[:16]}] {who}{source_label}：{item.get('text') or ''}"
                 if items and used + len(line) + 1 > _ARCHIVE_INPUT_CHARS:
                     break
                 items.append(item)
@@ -492,8 +482,12 @@ class ChatMemoryService:
             if previous and previous.get("content"):
                 payload_parts.append("此前已确认前情：\n" + str(previous["content"]))
             payload_parts.append("本批新增交互原文：\n" + "\n".join(lines))
+            archive_facts=[]
             try:
-                summary = await self._summarise_l2(provider, "\n\n".join(payload_parts))
+                if self._settings.memory.l3_enabled:
+                    summary,archive_facts=await self._summarise_l2_with_facts(provider,"\n\n".join(payload_parts),kept)
+                else:
+                    summary = await self._summarise_l2(provider, "\n\n".join(payload_parts))
             except asyncio.CancelledError:
                 await self._settle_l2_safely(
                     memory, archive_id, agent_id, "interrupted", "cancelled"
@@ -543,7 +537,18 @@ class ChatMemoryService:
                 return None
             self._counters["l2_completed"] += 1
             self._counters["l2_interactions_archived"] += len(kept)
+            facts_written=0
+            if archive_facts:
+                try:
+                    facts_written=await memory.l3_from_archive(agent_id=agent_id,conversation_id=conversation_id,
+                        archive_id=archive_id,facts=archive_facts)
+                    self._counters['facts_written']+=facts_written
+                except asyncio.CancelledError:raise
+                except Exception as exc:
+                    self._counters['facts_failed']+=1
+                    logger.warning('archive_l3_write_failed type=%s',type(exc).__name__)
             return {
+                "facts_written":facts_written,
                 "archive_id": archive_id,
                 "interactions": len(kept),
                 "planned": len(plan.get("items") or []),
@@ -572,6 +577,40 @@ class ChatMemoryService:
         if not text:
             raise ValueError("empty_summary")
         return text
+
+    async def _summarise_l2_with_facts(self,provider,payload,items):
+        """One paid request per archive; member evidence and summary stay separate."""
+        sources={str(item.get('event_id')):item for item in items
+                 if item.get('role')=='member' and item.get('kind','text')=='text'
+                 and str(item.get('text') or '').strip() and not str(item.get('text')).lstrip().startswith('[')}
+        policy=(L2_ARCHIVE_SYSTEM+'\n同时只从本批成员原话中筛选最多3条值得长期记住的人物事实。'
+            '只保留明确的称呼、稳定偏好、个人背景、长期习惯，空数组完全正常。'
+            '不保存临时动作、睡觉/熬夜/情绪/当前状态、发送图片文件、单次游戏、寒暄、玩笑、第三人转述或助手说的话。'
+            '不得把前情摘要当作新证据；每条只能归属于该条原文说话者本人。'
+            '输出JSON：{"summary":"...","facts":[{"source_event_id":"本批原话事件ID",'
+            '"category":"name|stable_preference|personal_background|long_term_habit","content":"清楚独立的长期事实短句",'
+            '"quote":"原话逐字片段"}]}。')
+        request=ModelRequest(purpose=ModelPurpose.CONVERSATION_SUMMARY,messages=(
+            ModelMessage(role=MessageRole.SYSTEM,content=policy),
+            ModelMessage(role=MessageRole.USER,content=json.dumps({'context':payload,'eligible_member_source_ids':list(sources)},ensure_ascii=False))),tools=())
+        self._counters['llm_calls']+=1
+        result=await asyncio.wait_for(provider.complete(request),timeout=float(self._settings.archive.timeout_seconds))
+        if getattr(result,'finish_reason','stop')!='stop' or getattr(result,'tool_calls',()):raise ValueError('archive_response_incomplete')
+        data=json.loads(result.text or '{}');summary=str(data.get('summary') or '').strip()[:_L2_SUMMARY_CHARS]
+        if not summary:raise ValueError('empty_summary')
+        rows=data.get('facts',[]);facts=[]
+        transient=re.compile(r'发送.{0,8}(图片|照片|文件|表情)|发了.{0,6}(图|文件|表情)|睡了|睡觉|熬夜|晚安|早安|现在|刚刚|今天|今晚|昨天|心情|困了|饿了|\[.*(?:图片|表情|文件)')
+        categories={'name','stable_preference','personal_background','long_term_habit'}
+        if isinstance(rows,list):
+            for row in rows[:3]:
+                if not isinstance(row,dict):continue
+                source=sources.get(str(row.get('source_event_id') or ''))
+                content=str(row.get('content') or '').strip();quote=str(row.get('quote') or '').strip()
+                if not source or row.get('category') not in categories or not 4<=len(content)<=160 or not 4<=len(quote)<=160:continue
+                if quote not in source['text'] or transient.search(content+' '+quote):continue
+                if any(item['content']==content for item in facts):continue
+                facts.append({'source_event_id':str(source['event_id']),'content':content,'quote':quote,'category':row['category']})
+        return summary,facts
 
     async def _settle_l2_safely(self, memory, archive_id: str, agent_id: str,
                                 state: str, error_code: str) -> None:
@@ -617,137 +656,9 @@ class ChatMemoryService:
     # 事实（L3）
     # ------------------------------------------------------------------ #
 
-    async def scan_facts(self, *, agent_id: str, conversation_id: str, memory,
-                         provider, force: bool = False) -> int:
-        memory_settings = self._settings.memory
-        if not memory_settings.l3_enabled or provider is None:
-            return 0
-        lock = self._lock(f"l3:{agent_id}:{conversation_id}")
-        if lock.locked():
-            return 0
-        async with lock:
-            cursor = await memory.chat_cursor_get(
-                agent_id=agent_id, conversation_id=conversation_id, kind="l3"
-            )
-            counts = await memory.chat_counts(
-                agent_id=agent_id, conversation_id=conversation_id
-            )
-            pending = int(counts["last_seq"]) - cursor
-            if pending <= 0:
-                return 0
-            if not force and pending < max(1, int(memory_settings.l3_scan_every_messages)):
-                return 0
-            items = await memory.chat_after(
-                agent_id=agent_id, conversation_id=conversation_id,
-                after_seq=cursor, limit=min(_L3_MAX_ITEMS, pending),
-            )
-            if not items:
-                return 0
-            self._counters["facts_scans"] += 1
-            written = 0
-            last_ok = cursor
-            eligible=set(await memory.chat_l3_eligible(agent_id=agent_id,conversation_id=conversation_id,after_seq=cursor))
-            calls=0
-            for item in items:
-                seq = int(item.get("seq") or 0)
-                if seq not in eligible:
-                    last_ok=seq
-                    continue
-                if calls>=2:break
-                if item.get("role") != "member":
-                    last_ok = seq
-                    continue
-                record_id = str(item.get("source_record_id") or "")
-                identity = (
-                    await memory.chat_identity_for_record(
-                        agent_id=agent_id, conversation_id=conversation_id,
-                        record_id=record_id,
-                    ) if record_id else ""
-                )
-                if not identity:
-                    last_ok = seq
-                    continue
-                try:
-                    calls+=1
-                    from pero.memory.l3_extract import extract_facts
-                    outcome = await extract_facts(
-                        provider,
-                        text=str(item.get("text") or ""),
-                        occurred_at=str(item.get("occurred_at") or ""),
-                        max_facts=_L3_MAX_FACTS,
-                        timeout_seconds=float(memory_settings.l3_extract_timeout_seconds),
-                    )
-                    self._counters["llm_calls"] += 1
-                except Exception as exc:  # noqa: BLE001
-                    self._counters["facts_failed"] += 1
-                    self._last_error["facts"] = type(exc).__name__
-                    logger.warning("l3 scan failed: %s", type(exc).__name__)
-                    break
-                if str(getattr(outcome, "state", "")) == 'empty':
-                    last_ok=seq
-                    continue
-                if str(getattr(outcome, "state", "")) != "ok":
-                    self._last_error["facts"] = "extract_not_ok"
-                    break
-                for fact in getattr(outcome, "facts", ()) or ():
-                    if isinstance(fact, dict):
-                        content = str(fact.get("content") or "")
-                        quote = str(fact.get("evidence_quote") or fact.get('quote') or "")
-                        evidence = str(fact.get("evidence_type") or "")
-                    else:
-                        content = str(getattr(fact, "content", "") or "")
-                        quote = str(getattr(fact, "quote", "") or "")
-                        evidence = str(getattr(fact, "evidence_type", "") or "")
-                    content = content.strip()
-                    quote = quote.strip()
-                    if not content or not quote:
-                        continue
-                    status = "active" if evidence in _EXPLICIT_EVIDENCE else "candidate"
-                    # 用户明确纠正：只对**同一身份**的既有 active 事实做替代；
-                    # 无法确定指向时保留候选，不自动撤回别人的事实。
-                    supersedes = ""
-                    if status == "active" and any(
-                        word in str(item.get("text") or "") for word in _CORRECTION_WORDS
-                    ):
-                        related = await memory.chat_l3_list(
-                            agent_id=agent_id, conversation_id=conversation_id,
-                            status="active", identity_id=identity, limit=20,
-                        )
-                        original=str(item.get('text') or '')
-                        matches=[old for old in related if str(old.get('content') or '').strip() and str(old['content']).strip() in original and str(old['content']).strip()!=content]
-                        if len(matches)==1:supersedes=str(matches[0]['fact_id'])
-                        else:status='candidate'
-                    saved = await memory.l3_candidate_upsert(
-                        agent_id=agent_id, conversation_id=conversation_id,
-                        identity_id=identity, content=content,
-                        evidence_quote=quote, source_record_ids=[record_id],
-                        display_name=str(item.get("display_name") or ""),
-                        source_seqs=[seq],
-                        occurred_at=str(item.get("occurred_at") or ""),
-                        status=status, evidence_type=evidence or "explicit_statement",
-                        replaces_fact_id=supersedes,
-                    )
-                    if saved and supersedes:
-                        await memory.l3_set_status(
-                            agent_id=agent_id, conversation_id=conversation_id,
-                            fact_id=supersedes, status="replaced",
-                            reason="user_correction",
-                            replaced_by=str(saved.get("fact_id") or ""),
-                        )
-                        self._counters["facts_replaced"] = (
-                            self._counters.get("facts_replaced", 0) + 1
-                        )
-                    if saved:
-                        written += 1
-                        if status == "candidate":
-                            self._counters["facts_candidates"] += 1
-                last_ok = seq
-            await memory.chat_cursor_set(
-                agent_id=agent_id, conversation_id=conversation_id, kind="l3",
-                last_seq=last_ok,
-            )
-            self._counters["facts_written"] += written
-            return written
+    async def scan_facts(self, **kwargs) -> int:
+        """Compatibility entry: independent L3 scans are disabled; archive only."""
+        return 0
 
     # ------------------------------------------------------------------ #
     # 事件（独立游标，不依赖事实是否写入）

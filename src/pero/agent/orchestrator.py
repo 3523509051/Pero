@@ -83,13 +83,6 @@ from pero.memory.models import (
     ToolEvidenceInput,
     render_retrieval_context,
     render_save_receipt,
-    stable_identity_id,
-)
-from pero.memory.l3_extract import extract_facts
-from pero.memory.p15_store import (
-    FACT_ACTIVE,
-    EVIDENCE_EXPLICIT_STATEMENT,
-    MemoryQueryErrorP15,
 )
 from pero.memory.repository import MemoryUnavailableError, MemoryWriteError
 from pero.memory.summaries import summarize_tool_outcome, plugin_tool_facts
@@ -1358,26 +1351,7 @@ class Orchestrator:
         # 模型批次不再有第二入口；本批次不依赖模型可用性保存原件。
         aux_used = 0
         aux_cap = self._settings.conversation.auxiliary_calls_per_turn
-        # P15：L3 人物事实整理（显式保存路径；占用辅助预算；有界）。
-        l3_note = ""
-        if (
-            memory is not None
-            and turn is not None
-            and turn.created
-            and explicit_save
-            and self._settings.memory.l3_enabled
-        ):
-            if aux_used >= aux_cap:
-                self._counters["auxiliary_budget_exhausted"] += 1
-                l3_note = "[人物事实整理跳过：本轮辅助调用预算已用完]"
-            else:
-                aux_used += 1
-                l3_note = await self._maybe_extract_l3(
-                    memory=memory, ref=ref, turn=turn, batch=batch,
-                    provider=provider,
-                )
-                if l3_note:
-                    save_receipts = save_receipts + [l3_note]
+        # L3 is extracted only as part of successful L2 archival.
         preflight_receipt: Optional[str] = None
         if message.conversation_type == 'private':
             joined, _judged = await self._private_participation(
@@ -2230,122 +2204,9 @@ class Orchestrator:
             self._counters["memory_save_duplicate"] += 1
         return outcome
 
-    async def _maybe_extract_l3(
-        self,
-        *,
-        memory: Any,
-        ref: ConversationRef,
-        turn: Any,
-        batch: Sequence[Any],
-        provider: Any,
-    ) -> str:
-        """L3 人物事实整理（P15-R01）：**按真实说话者归属**，失败不伪画像。
-
-        - 每个说话者只整理**自己的原文**（稳定身份由来源记录解析）；事实归属
-          该说话者本人，来源只挂该组自己的 record_ids——不拼整批归第一人；
-        - 涉及第三人的内容由提取器按提示词拒绝（无可靠证据不写）；
-        - 每轮最多整理 `l3_max_speakers_per_turn` 个说话者（有界）；无凭据 →
-          blocked；非法 JSON/证据不符 → failed；都如实注记，原文不受影响；
-        - 事实写入经 `l3_upsert` 程序校验（来源存在 + 逐字片段），入库后
-          增量入语义索引（role=L3）。
-        """
-        by_event = {event_id: rid for rid, event_id in turn.records}
-        groups: Dict[str, Dict[str, Any]] = {}
-        skipped_speakers = 0
-        max_speakers = max(1, int(getattr(self._settings.memory, "l3_max_speakers_per_turn", 2)))
-        for item in batch:
-            msg = item.message
-            record_id = by_event.get(msg.event_id)
-            body = (msg.text or "").strip()
-            if record_id is None or not body:
-                continue
-            identity_id = stable_identity_id(
-                ref.channel_id, ref.account_id, msg.sender_ref
-            )
-            if identity_id not in groups and len(groups) >= max_speakers:
-                skipped_speakers += 1
-                continue
-            group = groups.setdefault(identity_id, {
-                "display": msg.display_name or msg.sender_ref,
-                "texts": [],
-                "record_ids": [],
-            })
-            group["texts"].append(body)
-            group["record_ids"].append(record_id)
-        notes: List[str] = []
-        written_total = 0
-        for identity_id, group in groups.items():
-            outcome = await extract_facts(
-                provider,
-                text="\n".join(group["texts"]),
-                occurred_at="",
-                max_facts=self._settings.memory.l3_max_facts_per_turn,
-                timeout_seconds=10.0,
-            )
-            if outcome.state in {"blocked", "failed", "empty"}:
-                self._counters["l3_extract_blocked"] = (
-                    self._counters.get("l3_extract_blocked", 0) + 1
-                )
-                notes.append(
-                    f"[人物事实整理未写入（{group['display']}）：{outcome.state}——{outcome.detail}]"
-                )
-                continue
-            written = 0
-            for fact in outcome.facts:
-                try:
-                    result = await memory.l3_upsert(
-                        agent_id=ref.agent_id,
-                        conversation_id=ref.conversation_id,
-                        identity_id=identity_id,
-                        display_name=group["display"],
-                        content=fact["content"],
-                        status=FACT_ACTIVE,
-                        evidence_type=fact["evidence_type"],
-                        evidence_quote=fact.get("evidence_quote") or "",
-                        source_record_ids=group["record_ids"],
-                        occurred_at=fact.get("occurred_at") or "",
-                    )
-                    if result and not result.get("duplicate"):
-                        written += 1
-                        if self._semantic is not None:
-                            try:
-                                await self._semantic.index_texts(
-                                    agent_id=ref.agent_id,
-                                    conversation_id=ref.conversation_id,
-                                    items=[{
-                                        "record_id": result["fact_id"],
-                                        "role": "L3",
-                                        "text": fact["content"],
-                                    }],
-                                )
-                            except Exception as exc:  # noqa: BLE001
-                                logger.warning(
-                                    "l3_index_skip fact=%s error=%s",
-                                    result["fact_id"], type(exc).__name__,
-                                )
-                except (MemoryUnavailableError, MemoryWriteError, MemoryQueryErrorP15) as exc:
-                    logger.warning(
-                        "l3_upsert_failed agent=%s error=%s",
-                        ref.agent_id, getattr(exc, "code", type(exc).__name__),
-                    )
-                    break
-            if written:
-                written_total += written
-                notes.append(
-                    f"[人物事实整理（{group['display']}）：写入 {written} 条，"
-                    f"证据片段已核对原文]"
-                )
-            else:
-                notes.append(f"[人物事实整理（{group['display']}）：无新增（幂等跳过）]")
-        if skipped_speakers:
-            notes.append(
-                f"[人物事实整理：{skipped_speakers} 个说话者超出本轮整理上限，未处理]"
-            )
-        if written_total:
-            self._counters["l3_facts_written"] = (
-                self._counters.get("l3_facts_written", 0) + written_total
-            )
-        return "\n".join(notes)
+    async def _maybe_extract_l3(self, **kwargs) -> str:
+        """L3 only accumulates on successful L2 archival; explicit raw saves remain."""
+        return ""
 
     async def _retrieve(
         self, retriever: Any, ref: ConversationRef, text: str
@@ -2914,29 +2775,7 @@ class Orchestrator:
                         prepared.get("reason") or "image_unavailable", "指定图片未提供"
                     )
                 image_note = image_scope.notes()
-            l3_note = ""
-            if detected is not None and self._settings.memory.l3_enabled:
-                # HTTP 说话者 = 本地用户（固定 stable 身份，与通道同一路径整理）。
-                http_message = InboundMessage(
-                    event_id=source_event_id,
-                    channel_id="http",
-                    account_id=agent_id,
-                    conversation_id=memory_cid,
-                    sender_ref="local",
-                    text=text,
-                    display_name="HTTP 用户",
-                    received_at=now_iso,
-                    conversation_type="private",
-                    target_ref=session.session_id,
-                    dedupe_scope="http_process",
-                )
-                speaker_batch = [SimpleNamespace(message=http_message)]
-                l3_note = await self._maybe_extract_l3(
-                    memory=memory, ref=ref, turn=turn,
-                    batch=speaker_batch, provider=provider,
-                )
-                if l3_note:
-                    save_receipts = save_receipts + [l3_note]
+            # Explicit saves persist their original evidence; L3 waits for archival.
             advisories: List[Tuple[str, str]] = []
             from pero.knowledge.service import knowledge_for
             from pero.knowledge.tools import automatic_note,automatic_evidence

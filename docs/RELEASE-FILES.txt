@@ -1,6 +1,6 @@
-Source publication file list (2026-11-22; all-group combination update)
+Source publication file list (2026-11-23; L3 archive-only update)
 Repository: pero
-Files: 222
+Files: 223
 
 .env.example
 .gitignore
@@ -38,6 +38,7 @@ docs/local-launcher.md
 docs/plugin-sdk-v1-general.md
 docs/pre-push-review-2026-11-22-2009.md
 docs/pre-push-review-2026-11-22-2151.md
+docs/pre-push-review-2026-11-23-l3-archive.md
 docs/project-engineering.md
 docs/wechat-combination.md
 example-plugin/LICENSE

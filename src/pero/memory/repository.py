@@ -374,6 +374,9 @@ class SqliteMemoryRepository:
     async def l2_link_member(self, **kwargs):
         return await self._write(lambda store: store.l2_link_member(**kwargs))
 
+    async def l3_from_archive(self, **kwargs):
+        return await self._write(lambda store: store.l3_from_archive(**kwargs))
+
     async def l2_link_assistant(self, **kwargs):
         return await self._write(lambda store: store.l2_link_assistant(**kwargs))
 

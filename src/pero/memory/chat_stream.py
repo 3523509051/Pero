@@ -1048,12 +1048,36 @@ class ChatStreamMixin:
                 )
         return {"memory_id": memory_id, "duplicate": False}
 
+    def l3_from_archive(self,*,agent_id,conversation_id,archive_id,facts):
+        """Bind accepted facts to a successfully archived member's raw identity."""
+        with self._txn() as cur:
+            rows=cur.execute("SELECT ce.event_id,ce.text,ce.source_record_id,r.sender_identity_id,ce.display_name,ce.seq,ce.occurred_at "
+                "FROM l2_interaction i JOIN chat_event ce ON ce.event_id=i.event_id "
+                "JOIN l2_archive a ON a.archive_id=i.archive_id "
+                "JOIN raw_message r ON r.record_id=ce.source_record_id AND r.agent_id=i.agent_id AND r.conversation_id=i.conversation_id "
+                "WHERE i.agent_id=? AND i.conversation_id=? AND i.archive_id=? AND a.state='completed' "
+                "AND ce.role='member' AND ce.kind='text'",(agent_id,conversation_id,archive_id)).fetchall()
+        sources={str(row[0]):row for row in rows};written=0
+        for fact in facts[:3]:
+            source=sources.get(str(fact.get('source_event_id') or ''))
+            if not source or not source[2] or not source[3] or not fact.get('quote') or fact['quote'] not in source[1]:continue
+            with self._txn() as cur:
+                previous=cur.execute('SELECT status FROM l3_fact WHERE agent_id=? AND conversation_id=? AND identity_id=? AND content_hash=?',
+                    (agent_id,conversation_id,source[3],hashlib.sha256(fact['content'].encode('utf-8')).hexdigest()[:32])).fetchone()
+            if previous is not None and previous[0] in ('revoked','replaced'):continue
+            saved=self.l3_candidate_upsert(agent_id=agent_id,conversation_id=conversation_id,identity_id=source[3],
+                content=fact['content'],evidence_quote=fact['quote'],source_record_ids=[source[2]],
+                display_name=str(source[4] or ''),source_seqs=[source[5]],occurred_at=str(source[6] or ''),
+                status='active',record_mode='l2_archive',evidence_type='explicit_preference' if fact.get('category')=='stable_preference' else 'explicit_statement')
+            if saved and not saved.get('duplicate'):written+=1
+        return written
+
     def l3_candidate_upsert(
         self, *, agent_id: str, conversation_id: str, identity_id: str,
         content: str, evidence_quote: str, source_record_ids: Sequence[str],
         display_name: str = "", source_seqs: Sequence[int] = (),
         occurred_at: str = "", status: str = "candidate",
-        evidence_type: str = "explicit_statement", replaces_fact_id: str = "",
+        evidence_type: str = "explicit_statement", replaces_fact_id: str = "", record_mode: str = "",
     ) -> Optional[Dict[str, Any]]:
         """L3 候选/生效事实写入（来源与逐字证据必须可核对）。
 
@@ -1099,7 +1123,7 @@ class ChatStreamMixin:
                     "replaces_fact_id=COALESCE(?,replaces_fact_id) WHERE fact_id=?",
                     (merged_status, now, quote,
                      json.dumps([int(item) for item in source_seqs][:200]),
-                     "background" if status == "candidate" else "explicit",
+                     record_mode or ("background" if status == "candidate" else "explicit"),
                      replaces_fact_id or None, fact_id),
                 )
                 return {"fact_id": fact_id, "duplicate": True, "status": merged_status}
@@ -1113,7 +1137,7 @@ class ChatStreamMixin:
                  text, content_hash, status, evidence_type, quote,
                  json.dumps(records, ensure_ascii=False),
                  occurred_at or None, now, now,
-                 "background" if status == "candidate" else "explicit",
+                 record_mode or ("background" if status == "candidate" else "explicit"),
                  replaces_fact_id or None,
                  json.dumps([int(item) for item in source_seqs][:200])),
             )
