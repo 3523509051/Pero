@@ -1,4 +1,5 @@
 Source publication file list (2026-11-27)
+Management credential owner addition: src/pero/manager/local_access.py
 Restored frontend source: frontend/src/time.ts
 Independent installer addition: install-pero.cmd
 Repository: Pero

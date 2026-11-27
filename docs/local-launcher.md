@@ -9,7 +9,7 @@
 3. 保留启动窗口。要停止时运行 `stop.cmd` 或在启动窗口按 Ctrl+C。
 4. `status.cmd` 显示当前脚本实例的地址、配置、日志与两个服务的健康状态。
 
-只有查看访问码脚本显式展示明文，启动日志和 session.json 不保存它。首次自动生成的随机码经现有用户级 DPAPI 加密，路径为 `data/launcher/management-token.dpapi`；再次启动复用同一个码。
+只有查看访问码脚本显式展示明文，启动日志和 session.json 不保存它。首次自动生成的随机码经现有用户级 DPAPI 加密，路径为 `data/manager/management-token.dpapi`；再次启动复用同一个码。
 
 启动前的 `PERO_MANAGEMENT_TOKEN` 可指定访问码，启动器会将其加密保存，核心和控制室共用该值。已有其它部署使用不同访问码时应分别管理；本脚本不从其它任务提取令牌，也不接管其它实例。密文不可直接迁给另一台机器或另一个用户使用。
 
@@ -42,7 +42,7 @@
 | `--no-browser` | 关闭 | 只启动服务，不自动打开浏览器 |
 | `--start-timeout` | 60 秒 | 等待两个服务健康；超时清理本次创建的进程 |
 | `--stop-timeout` | 120 秒 | 等待对话／后台任务收尾，超过后取消本次停止请求 |
-| `--state-dir` | data/launcher | 启动状态和管理码密文目录；使用后，stop/status/login-code 也需传同一参数 |
+| `--state-dir` | data/launcher | 启动状态目录；使用后 stop/status 需传同一参数。访问码统一保存在 Pero/data/manager，旧目录可用于启动时迁移 |
 | `--manager-state-dir` | data/manager | 控制室配置／托管凭据目录；更换此目录意味着使用另一份控制室数据 |
 
 自定义 `--state-dir` 的状态操作示例：
@@ -93,3 +93,5 @@ $env:PERO_MANAGEMENT_TOKEN = '<与核心相同的管理访问码>'
 | 停止等待超时 | 查看正在执行的对话及任务，收尾后重试；不要把未确认发送当成未发送 |
 
 微信组合启动已由 webot 统一管理。Pero 不再提供微信扫描、配对和桥进程启动参数。不要同时运行独立 Pero 与 webot 组合实例；需要组合部署时，请阅读 webot 仓库的 docs/deployment-windows.md。
+
+管理访问码统一由 Pero 负责。无论使用 Pero 独立启动还是 webot 组合启动，都在 Pero 根目录运行 login-code.cmd 查看；新位置为 data/manager/management-token.dpapi，启动时可迁移原有用户加密的访问码。webot 不提供查看入口。更新后重新启动组合，以采用统一凭据。

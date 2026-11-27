@@ -58,23 +58,11 @@ def load_state(state_dir):
 
 
 def management_token(state_dir,*,create=False):
-    override=os.environ.get('PERO_MANAGEMENT_TOKEN','').strip()
-    return protected_token(state_dir/'management-token.dpapi',override,create=create)
-
-
-def protected_token(path,override='',*,create=False):
-    from pero.manager.vault import DPAPI,VaultError
+    from pero.manager.local_access import management_token as owned_token, AccessCodeError
     try:
-        if override and create:
-            atomic_write(path,DPAPI.transform(override.encode('utf-8')))
-            return override
-        if path.exists():return DPAPI.transform(path.read_bytes(),decrypt=True).decode('utf-8')
-        if not create:raise LauncherError('尚未保存管理访问码，请先运行 start.cmd。')
-        value=secrets.token_urlsafe(32)
-        atomic_write(path,DPAPI.transform(value.encode('utf-8')))
-        return value
-    except (VaultError,UnicodeError,OSError):
-        raise LauncherError('无法读取当前 Windows 用户加密的管理访问码；请使用原运行用户检查，不会覆盖旧密文。') from None
+        return owned_token(create=create,legacy_paths=[state_dir/'management-token.dpapi'])
+    except AccessCodeError as error:
+        raise LauncherError(str(error)) from None
 
 
 def request(url,path,*,token='',body=None):

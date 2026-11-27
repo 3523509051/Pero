@@ -1,5 +1,9 @@
 # Pre-push review — 2026-11-27
 
+## Pero-owned management access code
+
+PASS. Added pero.manager.local_access as the single owner of creation, DPAPI storage, reuse and legacy migration. Both launchers call this module; explicit viewing remains only in Pero/login-code.cmd. Canonical storage is Pero/data/manager/management-token.dpapi. Tested no-create-on-read, encrypted storage, reuse, legacy migration and explicit environment override in temporary stores. Also verified that Pero's viewing CLI produces the access code accepted by the protected management API of a webot-started isolated combination; no credential value was logged. Independent and combined start/stop checks passed. Existing running processes require a normal restart to adopt the unified store.
+
 ## Missing frontend source repair
 
 PASS. Restored frontend/src/time.ts, omitted from the earlier source publication despite imports by seven frontend modules. Compared the complete local frontend/src TypeScript/CSS/JSON file set against the release: time.ts was the only absent source. Executed npm ci followed by npm run build against the release checkout; TypeScript checking and Vite production bundling completed successfully. This is a source restoration; no dependency or runtime configuration change. Earlier validation using existing compiled assets did not establish clean source buildability and is superseded by this fresh build verification.
