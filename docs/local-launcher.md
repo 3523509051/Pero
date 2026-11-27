@@ -1,6 +1,6 @@
 # Windows 本地启动
 
-启动器用于源码仓库，不安装依赖或替换现有部署。先按 README 创建 `.venv`、安装后端依赖并构建 `frontend/dist`。普通模式管理 Core／Manager，微信组合模式还管理桥进程；微信客户端始终由用户手动启动与登录。
+启动器用于源码仓库，不安装依赖或替换现有部署。先按 README 创建 `.venv`、安装后端依赖并构建 `frontend/dist`。本入口仅管理 Core／Manager；微信客户端始终由用户手动启动与登录。
 
 ## 日常操作
 
@@ -44,9 +44,6 @@
 | `--stop-timeout` | 120 秒 | 等待对话／后台任务收尾，超过后取消本次停止请求 |
 | `--state-dir` | data/launcher | 启动状态和管理码密文目录；使用后，stop/status/login-code 也需传同一参数 |
 | `--manager-state-dir` | data/manager | 控制室配置／托管凭据目录；更换此目录意味着使用另一份控制室数据 |
-| `--with-webot` | 关闭 | 启用全群扫描和桥组合启动，不启动微信 |
-| `--webot-root` | 并列 webot 目录 | 指定桥仓库路径，同时启用组合启动 |
-| `--agent-id` | 配置中的首个 Agent | 新扫描群的绑定对象，原有绑定保持不变 |
 
 自定义 `--state-dir` 的状态操作示例：
 
@@ -95,4 +92,4 @@ $env:PERO_MANAGEMENT_TOKEN = '<与核心相同的管理访问码>'
 | 页面正常但不能对话 | 核对模型、桥、路由、授权及自动处理／发送开关 |
 | 停止等待超时 | 查看正在执行的对话及任务，收尾后重试；不要把未确认发送当成未发送 |
 
-普通 start.cmd 不启动 webot。`start-wechat.cmd` 或 `start.cmd --with-webot` 会扫描全部群并启动桥；微信客户端仍需手动启动和登录。webot 路径默认在并列目录，可用 `--webot-root` 指定；`--agent-id` 指定新增群绑定 Agent。详细步骤见 [微信组合使用指南](wechat-combination.md)。
+微信组合启动已由 webot 统一管理。Pero 不再提供微信扫描、配对和桥进程启动参数。不要同时运行独立 Pero 与 webot 组合实例；需要组合部署时，请阅读 webot 仓库的 docs/deployment-windows.md。
