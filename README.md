@@ -369,7 +369,7 @@ cd ..
 
 **管理访问码与模型 API Key 是两种不同凭据。** 启动器让核心和控制室共用管理访问码，不替你生成模型 Key。如启动前已经设置 `PERO_MANAGEMENT_TOKEN`，本次会采用该值并加密保存，之后可用 `login-code.cmd` 查看。环境变量示例文件不会代替当前进程的环境配置；如使用环境变量提供模型 Key，需要实际设置 `PERO_DEEPSEEK_API_KEY`，不能只编辑文件后假定已加载。
 
-Pero 的 `start.cmd` 只管理独立 Core 和控制室。微信账号识别、群选择和组合启动已移至 **webot**；需要接入微信时，从 webot 仓库运行 `setup.cmd`、`start.cmd`，不要同时启动 Pero 的独立实例。
+Pero 的 `start.cmd` 只管理独立 Core 和控制室。微信账号识别和组合启动已移至 **webot**；需要接入微信时，从 webot 仓库运行 `start.cmd`，启动时自动同步机器人账号的全部群聊，无需选群。入群或退群后重新启动组合以同步列表；不要同时启动 Pero 的独立实例。
 
 组合安装步骤见 [webot Windows 部署指南](https://github.com/3523509051/webot/blob/main/docs/deployment-windows.md)。
 

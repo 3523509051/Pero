@@ -1,5 +1,9 @@
 # Pre-push review — 2026-11-27
 
+## All-group documentation revision
+
+PASS. README and the combination redirect now describe automatic all-group startup in webot rather than its removed setup/selection step. Membership is synchronized on restart; Pero's code and independent service behavior are unchanged in this documentation-only follow-up.
+
 Verdict: PASS for the local Windows deployment/ownership change.
 Base branch: origin/main (69d42daf1297a98a691593f0030c969167e865fc).
 Reviewed range: 69d42daf1297a98a691593f0030c969167e865fc..c6ce764e177f863e32670b9e56030770fb339f64. The following report commit contains documentation only.
