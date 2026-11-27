@@ -1,5 +1,9 @@
 # Pre-push review — 2026-11-27
 
+## Cookie-session CSRF save repair
+
+PASS. Replaced the module-global cached CSRF request path with a shared HTTP client that reads the current authenticated cookie session before each mutation, excluding initial login. This covers cookie changes across tabs and missing/stale in-memory CSRF state. Read requests are unchanged; writes are never automatically retried. Authentication/CSRF server protections remain intact. Verified mocked client scenarios for per-write refresh, session change, read/login behavior and refusal to write after expired/missing session tokens. An isolated FastAPI test reproduced rejection of the stale token before its handler and acceptance of the refreshed token exactly once. TypeScript and Vite production build passed. No real API Key or vault content was read, changed or logged; no model request was sent.
+
 ## Independent background entry (latest requirement)
 
 PASS. Pero/start.cmd now launches its existing owned Core/Manager supervisor in the background, with health checks before opening the browser; it never starts webot. stop/status retain independent ownership. Pero owns separate management and OneBot credentials, enabling an explicitly configured external bridge to run in its own process environment. Optional local scope labels are read from Pero's manager state. Verified actual isolated background startup, access-code authentication, cooperative stop, and that stopping Pero does not stop an independently running synthetic bridge. Tests ended with all fixture processes stopped. Existing running legacy combination processes must be stopped through the migration-only old-stop entry before adopting the new startup flow.

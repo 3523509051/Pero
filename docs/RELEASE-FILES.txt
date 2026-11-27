@@ -1,4 +1,5 @@
 Source publication file list (2026-11-27; independent background services)
+CSRF HTTP client addition: frontend/src/http.ts
 Repository: Pero
 
 .env.example
