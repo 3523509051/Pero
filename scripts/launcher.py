@@ -24,7 +24,13 @@ def atomic_write(path,data):
     temporary=path.with_name(path.name+'.'+secrets.token_hex(6)+'.tmp')
     try:
         with temporary.open('wb') as file:file.write(data);file.flush();os.fsync(file.fileno())
-        os.replace(temporary,path)
+        for attempt in range(20):
+            try:
+                os.replace(temporary,path)
+                break
+            except PermissionError:
+                if attempt==19:raise
+                time.sleep(.02)
     finally:temporary.unlink(missing_ok=True)
 
 
@@ -143,49 +149,84 @@ def start(args,state_dir):
     lock=InstanceLock(ROOT/'data/launcher.lock')
     if not lock.acquire():
         state=load_state(state_dir)
-        print('此目录的启动器已经运行：'+state['manager_url'])
-        if not args.no_browser and health_check(state['manager_url'],'/manage/v1/health','pero-manager'):webbrowser.open(state['manager_url'])
+        print('Pero 控制室已经在运行：'+state['manager_url'])
+        if not args.no_browser:webbrowser.open(state['manager_url'])
         return 0
-    job=None;state=None
+    core_job=None;manager_job=None;state=None;core=None;manager=None
     try:
         config,settings=check(args)
-        available(settings.service.host,settings.service.port);available('127.0.0.1',args.manager_port)
+        available(settings.service.host,settings.service.port)
+        available('127.0.0.1',args.manager_port)
         if settings.channels.onebot11.enabled:available(settings.channels.onebot11.host,settings.channels.onebot11.port)
         token=management_token(state_dir,create=True)
         from windows_job import WindowsJob
-        job=WindowsJob();run_id=secrets.token_hex(8);run_dir=state_dir/'runs'/run_id;run_dir.mkdir(parents=True)
+        run_id=secrets.token_hex(8);run_dir=state_dir/'runs'/run_id;run_dir.mkdir(parents=True)
         core_url=f'http://127.0.0.1:{settings.service.port}'
         if settings.service.host not in ('127.0.0.1','localhost','0.0.0.0','::','::1'):
-            raise LauncherError('此本地启动器要求核心能通过本机回环访问；远程服务请单独部署。')
+            raise LauncherError('本地启动器要求核心可以通过本机回环访问。')
         if settings.service.host in ('::','::1'):core_url=f'http://[::1]:{settings.service.port}'
         if settings.service.host=='localhost':core_url=f'http://localhost:{settings.service.port}'
         manager_url=f'http://127.0.0.1:{args.manager_port}'
-        log_dir=ROOT/'logs'/'launcher'/run_id
-        env=dict(os.environ,PERO_MANAGEMENT_TOKEN=token,PERO_MANAGER_URL=manager_url,PYTHONIOENCODING='utf-8',PYTHONUNBUFFERED='1')
+        log_dir=ROOT/'logs/launcher'/run_id
+        env=dict(os.environ,PERO_MANAGEMENT_TOKEN=token,PERO_MANAGER_URL=manager_url,
+                 PYTHONIOENCODING='utf-8',PYTHONUNBUFFERED='1')
         if settings.channels.onebot11.enabled:
             from pero.manager.local_access import onebot_token
             variable=settings.channels.onebot11.token_env
             if variable:env[variable]=onebot_token(create=True,environment=variable)
         env['PYTHONPATH']=str(ROOT/'src')+(os.pathsep+env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
-        children=[]
-        for component in ('core','manager'):
+        state={'run_id':run_id,'pid':os.getpid(),'core_pid':None,'manager_pid':None,
+               'config':str(config),'core_url':core_url,'manager_url':manager_url,'logs':str(log_dir)}
+        last_published=None
+        def publish():
+            nonlocal last_published
+            active=core is not None and core.poll() is None
+            state['core_pid']=core.pid if active else None
+            signature=(state['core_pid'],state['manager_pid'])
+            if signature==last_published:return
+            atomic_write(run_dir/'core-state.json',json.dumps({'running':active,'pid':state['core_pid']}).encode())
+            atomic_write(state_dir/'session.json',json.dumps(state,ensure_ascii=False,indent=2).encode())
+            last_published=signature
+        def spawn(component,job,stopfile,childenv):
             command=[sys.executable,str(ROOT/'scripts/launch_child.py'),component,'--config',str(config),
-                     '--manager-port',str(args.manager_port),'--core-url',core_url,'--manager-state',str(args.manager_state_dir.resolve()),
-                     '--stop-file',str(run_dir/'stop'),'--log',str(log_dir/(component+'.log'))]
+                     '--manager-port',str(args.manager_port),'--core-url',core_url,
+                     '--manager-state',str(args.manager_state_dir.resolve()),'--stop-file',str(stopfile),
+                     '--log',str(log_dir/(component+'.log'))]
             labels=args.manager_state_dir/'scope-labels.json'
             if component=='manager' and labels.is_file():command+=['--scope-labels',str(labels)]
-            children.append(job.spawn(command,cwd=ROOT,env=env))
-        state={'run_id':run_id,'pid':os.getpid(),'core_pid':children[0].pid,'manager_pid':children[1].pid,
-               'config':str(config),'core_url':core_url,'manager_url':manager_url,'logs':str(log_dir)}
-        atomic_write(state_dir/'session.json',json.dumps(state,ensure_ascii=False,indent=2).encode('utf-8'))
+            return job.spawn(command,cwd=ROOT,env=childenv)
+        def start_core():
+            nonlocal core,core_job
+            if core is not None and core.poll() is None:return
+            available(settings.service.host,settings.service.port)
+            if settings.channels.onebot11.enabled:available(settings.channels.onebot11.host,settings.channels.onebot11.port)
+            if core_job:core_job.close()
+            (run_dir/'core-stop').unlink(missing_ok=True)
+            core_job=WindowsJob();core=spawn('core',core_job,run_dir/'core-stop',env);publish()
+        def stop_core():
+            nonlocal core,core_job
+            if core is None or core.poll() is not None:publish();return
+            if not drain(state,token,args.stop_timeout):
+                raise LauncherError('核心仍忙或无法核对，未停止。')
+            (run_dir/'core-stop').touch()
+            deadline=time.monotonic()+30
+            while core.poll() is None and time.monotonic()<deadline:time.sleep(.2)
+            if core.poll() is None:raise LauncherError('核心停止未确认，请检查日志。')
+            core_job.close();core_job=None;core=None;publish()
+        publish()
+        start_core()
+        manager_job=WindowsJob()
+        manager_env={**env,'PERO_LOCAL_CONTROL_DIR':str(run_dir.resolve())}
+        manager=spawn('manager',manager_job,run_dir/'manager-stop',manager_env)
+        state['manager_pid']=manager.pid;publish()
         deadline=time.monotonic()+args.start_timeout
         while time.monotonic()<deadline:
-            if any(child.poll() is not None for child in children):raise LauncherError('服务启动失败，请检查日志：'+str(log_dir))
+            if manager.poll() is not None:raise LauncherError('控制室退出，请检查日志。')
+            if core.poll() is not None:raise LauncherError('核心启动失败，请检查日志。')
             if health_check(core_url,'/health','pero') and health_check(manager_url,'/manage/v1/health','pero-manager'):break
-            time.sleep(0.3)
-        else:raise LauncherError('启动健康检查超时，请检查日志：'+str(log_dir))
-        print('Pero 已启动。\n控制室：'+manager_url+'\n日志：'+str(log_dir)+'\n运行 login-code.cmd 查看管理访问码。\n请保留本窗口；用 stop.cmd 或 Ctrl+C 请求收尾停止。',flush=True)
-        if os.environ.get('PERO_MANAGEMENT_TOKEN'):print('本次沿用环境变量中的管理访问码。',flush=True)
+            time.sleep(.3)
+        else:raise LauncherError('启动健康检查超时，请检查日志。')
+        print('Pero 核心与控制室已启动；网页服务按钮只控制核心，控制室保持在线。',flush=True)
         if not args.no_browser:webbrowser.open(manager_url)
         requested=False
         def stop_signal(*_):
@@ -193,22 +234,38 @@ def start(args,state_dir):
             requested=True
         signal.signal(signal.SIGINT,stop_signal)
         while True:
-            if any(child.poll() is not None for child in children):raise LauncherError('一个服务已退出，正在清理本次实例；请查看日志：'+str(log_dir))
+            if manager.poll() is not None:raise LauncherError('控制室进程已退出。')
+            publish()
             marker=state_dir/'stop-request.json'
             try:requested=requested or (marker.exists() and json.loads(marker.read_text())['run_id']==run_id)
             except (OSError,ValueError,KeyError):pass
             if requested:
-                print('正在等待对话与后台任务收尾……',flush=True)
-                if not drain(state,token,args.stop_timeout):
-                    print('服务仍忙或无法确认，已取消本次停止请求，请稍后重试。',flush=True)
-                    marker.unlink(missing_ok=True);requested=False;continue
-                (run_dir/'stop').touch()
+                try:stop_core()
+                except LauncherError:
+                    marker.unlink(missing_ok=True);requested=False;time.sleep(.3);continue
+                (run_dir/'manager-stop').touch()
                 deadline=time.monotonic()+30
-                while time.monotonic()<deadline and any(child.poll() is None for child in children):time.sleep(0.25)
-                print('Pero 已停止。',flush=True);return 0
-            time.sleep(0.3)
+                while manager.poll() is None and time.monotonic()<deadline:time.sleep(.2)
+                return 0
+            command=run_dir/'core-request.json'
+            if command.is_file():
+                request_value={}
+                try:
+                    request_value=json.loads(command.read_text(encoding='utf-8'))
+                    command.unlink()
+                    if set(request_value)!={'request_id','action'}:raise ValueError()
+                    if request_value['action']=='start':start_core()
+                    elif request_value['action']=='stop':stop_core()
+                    else:raise ValueError()
+                    result={'request_id':request_value['request_id'],'state':'accepted'}
+                except Exception:
+                    command.unlink(missing_ok=True)
+                    result={'request_id':request_value.get('request_id'),'state':'failed'}
+                publish();atomic_write(run_dir/'core-result.json',json.dumps(result).encode())
+            time.sleep(.2)
     finally:
-        if job:job.close()
+        if core_job:core_job.close()
+        if manager_job:manager_job.close()
         if state:
             (state_dir/'session.json').unlink(missing_ok=True)
             (state_dir/'stop-request.json').unlink(missing_ok=True)

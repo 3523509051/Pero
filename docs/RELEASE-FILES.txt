@@ -1,5 +1,4 @@
-Source publication file list (2026-11-27; independent background services)
-CSRF HTTP client addition: frontend/src/http.ts
+Source publication file list (2026-11-27; automatic local core and bridge control)
 Repository: Pero
 
 .env.example
@@ -63,6 +62,7 @@ frontend/public/mascot-home.png
 frontend/src/chat.tsx
 frontend/src/display_order.ts
 frontend/src/editor.tsx
+frontend/src/http.ts
 frontend/src/knowledge.tsx
 frontend/src/l2.tsx
 frontend/src/main.tsx
@@ -83,6 +83,7 @@ login-code.cmd
 pyproject.toml
 requirements-lock.txt
 scripts/background_entry.py
+scripts/check_local_services.py
 scripts/check_run.py
 scripts/launch_child.py
 scripts/launcher.py
@@ -161,6 +162,7 @@ src/pero/manager/app.py
 src/pero/manager/config_api.py
 src/pero/manager/credential_api.py
 src/pero/manager/local_access.py
+src/pero/manager/local_services.py
 src/pero/manager/plugins_api.py
 src/pero/manager/private_routes.py
 src/pero/manager/scopes.py

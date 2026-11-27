@@ -37,7 +37,11 @@ def create_manager_app(settings, *, transport=None, service_adapter=None):
     state_dir=Path(settings.state_dir or (repo_root() / 'data' / 'manager'))
     vault=CredentialVault(state_dir)
     realm=Sessions()
-    operations=Operations(reader,load_bindings(settings.services_path),state_dir/'operations.json',service_adapter)
+    bindings=load_bindings(settings.services_path)
+    if not bindings and service_adapter is None:
+        from .local_services import discover_local_services
+        bindings,service_adapter=discover_local_services(settings)
+    operations=Operations(reader,bindings,state_dir/'operations.json',service_adapter)
 
     @asynccontextmanager
     async def lifespan(app):

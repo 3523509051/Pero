@@ -1,5 +1,9 @@
 # Pre-push review — 2026-11-27
 
+## Automatically controlled Core with persistent Manager
+
+PASS. The local supervisor owns Core and Manager in separate Windows jobs, keeps Manager alive while the Core is stopped, publishes actual owned-process state, and consumes only fixed core start/stop actions. Manager automatically discovers its supervisor; bridge control is auto-discovered from the documented adjacent checkout or the existing connection registration, with no UI-supplied commands. Core stop drains work and confirms process exit; full stop.cmd still stops both Core and Manager. Fixed terminal operation receipts being published before cleanup completed, and bounded Windows file-sharing retries for atomic state publication. Verified control-state contracts, 25 bridge regressions, compilation/whitespace checks, and real isolated authenticated HTTP Core stop/start/restart with persistent Manager plus synthetic bridge stop/start. Both applications remain independent; fixture processes were closed. No real WeChat, model calls, memory edits or credentials printed. Manual unsupervised deployments retain observation without fabricated control capability.
+
 ## Automatic service observation independent of control bindings
 
 PASS. /services now observes Core health and OneBot connection even without scheduled-task control bindings. A healthy Core or connected bridge is shown as running; loss of connection does not falsely prove a process has stopped. Existing explicitly configured control adapters are preserved. UI distinguishes automatic observation from web-control capability rather than reporting all unbound services as unknown. Verified healthy-but-model-unconfigured Core, connected bridge, unavailable/disconnected observations, no inferred control authorization, and successful TypeScript/Vite production build. This change does not add automatic web start/stop/restart.

@@ -143,6 +143,7 @@ class Operations:
             await asyncio.sleep(.3)
         raise ServiceError(name+'_stop_unconfirmed')
     async def run(self,item):
+        completion={}
         try:
             action,target=item['action'],item['target']
             if action in {'stop','restart'}:
@@ -156,17 +157,18 @@ class Operations:
                 if target in {'stack','bridge'}:await self.start('bridge',item)
             targets=('pero','bridge') if target=='stack' else (target,)
             item['result']={name:await self.observe(name) for name in targets}
-            item.update(state='succeeded',stage='complete')
+            completion={'state':'succeeded','stage':'complete'}
         except asyncio.CancelledError:
-            item.update(state='unknown',reason='manager_shutdown')
+            completion={'state':'unknown','reason':'manager_shutdown'}
             raise
         except Exception as exc:
             reason=str(exc) if isinstance(exc,ServiceError) else type(exc).__name__
-            item.update(state='unknown' if reason.endswith('_unconfirmed') else 'failed',reason=reason)
+            completion={'state':'unknown' if reason.endswith('_unconfirmed') else 'failed','reason':reason}
         finally:
             # A failed task or bridge-only action must not leave the live core drained.
             try:await self.reader.management('POST','/drain',{'enabled':False})
             except Exception:pass
+            item.update(completion)
             item['finished_at']=time.time();self.persist()
     async def close(self):
         if self.task and not self.task.done():
