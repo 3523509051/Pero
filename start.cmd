@@ -7,7 +7,7 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-".venv\Scripts\python.exe" "scripts\launcher.py" start %*
+".venv\Scripts\python.exe" "scripts\background_entry.py" %*
 set "PERO_EXIT_CODE=%ERRORLEVEL%"
 if not "%PERO_EXIT_CODE%"=="0" pause
 exit /b %PERO_EXIT_CODE%

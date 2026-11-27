@@ -1,12 +1,12 @@
 # Windows 本地启动
 
-启动器用于源码仓库，不安装依赖或替换现有部署。先按 README 创建 `.venv`、安装后端依赖并构建 `frontend/dist`。本入口仅管理 Core／Manager；微信客户端始终由用户手动启动与登录。
+启动器用于源码仓库，不安装依赖或替换现有部署。start.cmd 在后台运行监督进程，只启动本项目。先按 README 创建 `.venv`、安装后端依赖并构建 `frontend/dist`。本入口仅管理 Core／Manager；微信客户端始终由用户手动启动与登录。
 
 ## 日常操作
 
 1. 双击仓库根目录 `start.cmd`，等待核心与控制室健康检查通过。
 2. 浏览器自动打开本机控制室。双击 `login-code.cmd`，用显示的管理访问码登录。
-3. 保留启动窗口。要停止时运行 `stop.cmd` 或在启动窗口按 Ctrl+C。
+3. 启动窗口完成后可以关闭，监督进程在后台运行。要停止时运行 `stop.cmd` 。
 4. `status.cmd` 显示当前脚本实例的地址、配置、日志与两个服务的健康状态。
 
 只有查看访问码脚本显式展示明文，启动日志和 session.json 不保存它。首次自动生成的随机码经现有用户级 DPAPI 加密，路径为 `data/manager/management-token.dpapi`；再次启动复用同一个码。
@@ -94,4 +94,6 @@ $env:PERO_MANAGEMENT_TOKEN = '<与核心相同的管理访问码>'
 
 微信组合启动已由 webot 统一管理。Pero 不再提供微信扫描、配对和桥进程启动参数。不要同时运行独立 Pero 与 webot 组合实例；需要组合部署时，请阅读 webot 仓库的 docs/deployment-windows.md。
 
-管理访问码统一由 Pero 负责。无论使用 Pero 独立启动还是 webot 组合启动，都在 Pero 根目录运行 login-code.cmd 查看；新位置为 data/manager/management-token.dpapi，启动时可迁移原有用户加密的访问码。webot 不提供查看入口。更新后重新启动组合，以采用统一凭据。
+管理访问码统一由 Pero 负责。访问码在 Pero 根目录运行 login-code.cmd 查看；新位置为 data/manager/management-token.dpapi，启动时可迁移原有用户加密的访问码。webot 不提供查看入口。更新后重新启动组合，以采用统一凭据。
+
+双方现独立启动：先启动 Pero，后启动 webot；各自 start/stop 不控制对方。连接配置由 webot 的连接Pero.cmd 在双方停止时执行，不再由启动入口组合拉起。

@@ -12,15 +12,16 @@ class AccessCodeError(RuntimeError):
     pass
 
 
-def management_token(*, create=False, legacy_paths=(), directory=None):
+def management_token(*, create=False, legacy_paths=(), directory=None,
+                     _name='management-token.dpapi', _environment='PERO_MANAGEMENT_TOKEN'):
     """Viewing never creates a credential; launchers request create explicitly.
 
     Optional legacy files permit migration without giving any bridge responsibility
     for generating or owning Pero's management credential.
     """
     folder = Path(directory) if directory is not None else ROOT / 'data/manager'
-    target = folder / 'management-token.dpapi'
-    override = os.environ.get('PERO_MANAGEMENT_TOKEN', '').strip()
+    target = folder / _name
+    override = os.environ.get(_environment, '').strip()
     try:
         if override and create:
             value = override
@@ -28,7 +29,7 @@ def management_token(*, create=False, legacy_paths=(), directory=None):
             return DPAPI.transform(target.read_bytes(), decrypt=True).decode('utf-8')
         else:
             value = None
-            for candidate in [*legacy_paths, ROOT / 'data/launcher/management-token.dpapi']:
+            for candidate in [*legacy_paths, ROOT / 'data/launcher' / _name]:
                 candidate = Path(candidate)
                 if candidate.is_file():
                     value = DPAPI.transform(candidate.read_bytes(), decrypt=True).decode('utf-8')
@@ -36,7 +37,7 @@ def management_token(*, create=False, legacy_paths=(), directory=None):
             if not create:
                 if value:
                     return value
-                raise AccessCodeError('尚未生成管理访问码，请先启动 Pero 或 webot 组合。')
+                raise AccessCodeError('尚未生成本机凭据，请先启动 Pero 或完成连接配置。')
             if not value:
                 value = secrets.token_urlsafe(32)
         protected = DPAPI.transform(value.encode('utf-8'))
@@ -58,3 +59,8 @@ def management_token(*, create=False, legacy_paths=(), directory=None):
         return value
     except (VaultError, UnicodeError, OSError) as error:
         raise AccessCodeError('无法读取当前 Windows 用户加密的管理访问码；请使用原用户检查，未输出凭据。') from error
+
+
+def onebot_token(*, create=False, legacy_paths=(), environment='PERO_ONEBOT_TOKEN',directory=None):
+    return management_token(create=create,legacy_paths=legacy_paths,directory=directory,
+                            _name='onebot-token.dpapi',_environment=environment)

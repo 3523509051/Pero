@@ -1,5 +1,9 @@
 # Pre-push review — 2026-11-27
 
+## Independent background entry (latest requirement)
+
+PASS. Pero/start.cmd now launches its existing owned Core/Manager supervisor in the background, with health checks before opening the browser; it never starts webot. stop/status retain independent ownership. Pero owns separate management and OneBot credentials, enabling an explicitly configured external bridge to run in its own process environment. Optional local scope labels are read from Pero's manager state. Verified actual isolated background startup, access-code authentication, cooperative stop, and that stopping Pero does not stop an independently running synthetic bridge. Tests ended with all fixture processes stopped. Existing running legacy combination processes must be stopped through the migration-only old-stop entry before adopting the new startup flow.
+
 ## Pero-owned management access code
 
 PASS. Added pero.manager.local_access as the single owner of creation, DPAPI storage, reuse and legacy migration. Both launchers call this module; explicit viewing remains only in Pero/login-code.cmd. Canonical storage is Pero/data/manager/management-token.dpapi. Tested no-create-on-read, encrypted storage, reuse, legacy migration and explicit environment override in temporary stores. Also verified that Pero's viewing CLI produces the access code accepted by the protected management API of a webot-started isolated combination; no credential value was logged. Independent and combined start/stop checks passed. Existing running processes require a normal restart to adopt the unified store.

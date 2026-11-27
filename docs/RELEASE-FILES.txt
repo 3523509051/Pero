@@ -1,7 +1,4 @@
-Source publication file list (2026-11-27)
-Management credential owner addition: src/pero/manager/local_access.py
-Restored frontend source: frontend/src/time.ts
-Independent installer addition: install-pero.cmd
+Source publication file list (2026-11-27; independent background services)
 Repository: Pero
 
 .env.example
@@ -76,12 +73,15 @@ frontend/src/providers.tsx
 frontend/src/request_id.ts
 frontend/src/stickers.tsx
 frontend/src/style.css
+frontend/src/time.ts
 frontend/src/visuals.tsx
 frontend/tsconfig.json
 frontend/vite.config.ts
+install-pero.cmd
 login-code.cmd
 pyproject.toml
 requirements-lock.txt
+scripts/background_entry.py
 scripts/check_run.py
 scripts/launch_child.py
 scripts/launcher.py
@@ -159,6 +159,7 @@ src/pero/manager/__main__.py
 src/pero/manager/app.py
 src/pero/manager/config_api.py
 src/pero/manager/credential_api.py
+src/pero/manager/local_access.py
 src/pero/manager/plugins_api.py
 src/pero/manager/private_routes.py
 src/pero/manager/scopes.py

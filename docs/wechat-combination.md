@@ -1,5 +1,5 @@
-# 微信组合入口已迁至 webot
+# 微信与 Pero 独立启动
 
-Pero 只提供独立的 Core 与控制室启动。微信绑定、全部群同步、组合启动和停止均在 webot 中完成。
+Pero/start.cmd 只后台启动 Core 和 Manager；webot/start.cmd 只后台启动微信桥。各自停止入口只停止本项目。首次连接需在双方停止时运行 webot/连接Pero.cmd；该脚本同步全部群路由和连接凭据，不启动服务、不选群。管理访问码始终由 Pero/login-code.cmd 查看。
 
-请按 [webot Windows 部署指南](https://github.com/3523509051/webot/blob/main/docs/deployment-windows.md) 操作。无需 setup.cmd 或首次选群；用机器人入群、退群管理接入范围，当前需重新启动组合以同步群列表。
+步骤见 [webot Windows 部署指南](https://github.com/3523509051/webot/blob/main/docs/deployment-windows.md)。

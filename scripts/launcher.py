@@ -162,12 +162,18 @@ def start(args,state_dir):
         manager_url=f'http://127.0.0.1:{args.manager_port}'
         log_dir=ROOT/'logs'/'launcher'/run_id
         env=dict(os.environ,PERO_MANAGEMENT_TOKEN=token,PERO_MANAGER_URL=manager_url,PYTHONIOENCODING='utf-8',PYTHONUNBUFFERED='1')
+        if settings.channels.onebot11.enabled:
+            from pero.manager.local_access import onebot_token
+            variable=settings.channels.onebot11.token_env
+            if variable:env[variable]=onebot_token(create=True,environment=variable)
         env['PYTHONPATH']=str(ROOT/'src')+(os.pathsep+env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
         children=[]
         for component in ('core','manager'):
             command=[sys.executable,str(ROOT/'scripts/launch_child.py'),component,'--config',str(config),
                      '--manager-port',str(args.manager_port),'--core-url',core_url,'--manager-state',str(args.manager_state_dir.resolve()),
                      '--stop-file',str(run_dir/'stop'),'--log',str(log_dir/(component+'.log'))]
+            labels=args.manager_state_dir/'scope-labels.json'
+            if component=='manager' and labels.is_file():command+=['--scope-labels',str(labels)]
             children.append(job.spawn(command,cwd=ROOT,env=env))
         state={'run_id':run_id,'pid':os.getpid(),'core_pid':children[0].pid,'manager_pid':children[1].pid,
                'config':str(config),'core_url':core_url,'manager_url':manager_url,'logs':str(log_dir)}
