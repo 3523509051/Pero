@@ -1,5 +1,9 @@
 # Pre-push review — 2026-11-27
 
+## Missing frontend source repair
+
+PASS. Restored frontend/src/time.ts, omitted from the earlier source publication despite imports by seven frontend modules. Compared the complete local frontend/src TypeScript/CSS/JSON file set against the release: time.ts was the only absent source. Executed npm ci followed by npm run build against the release checkout; TypeScript checking and Vite production bundling completed successfully. This is a source restoration; no dependency or runtime configuration change. Earlier validation using existing compiled assets did not establish clean source buildability and is superseded by this fresh build verification.
+
 ## Independent installer ownership
 
 PASS. Added install-pero.cmd to the Pero root, resolving paths relative to itself and installing only this project's backend and frontend. webot owns the combined installer and calls this entry. Incomplete repository validation and delegation/failure paths were checked with isolated shell fixtures; no live services or dependencies were changed by verification.

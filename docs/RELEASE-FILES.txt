@@ -1,4 +1,5 @@
 Source publication file list (2026-11-27)
+Restored frontend source: frontend/src/time.ts
 Independent installer addition: install-pero.cmd
 Repository: Pero
 
