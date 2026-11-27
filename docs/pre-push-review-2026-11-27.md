@@ -1,5 +1,9 @@
 # Pre-push review — 2026-11-27
 
+## README installation sequence clarification
+
+PASS, documentation-only change. README now leads with install-pero.cmd, start.cmd, then login-code.cmd; manual dependency commands are optional details rather than the primary path. Clarifies model/API Key setup after login, daily start/stop, separate webot onboarding and the current management credential location. Removed obsolete reference to the deleted webot/install.cmd. Verified entry filenames, ordering, Markdown fences and diff whitespace; no runtime, configuration or data changes.
+
 ## Automatically controlled Core with persistent Manager
 
 PASS. The local supervisor owns Core and Manager in separate Windows jobs, keeps Manager alive while the Core is stopped, publishes actual owned-process state, and consumes only fixed core start/stop actions. Manager automatically discovers its supervisor; bridge control is auto-discovered from the documented adjacent checkout or the existing connection registration, with no UI-supplied commands. Core stop drains work and confirms process exit; full stop.cmd still stops both Core and Manager. Fixed terminal operation receipts being published before cleanup completed, and bounded Windows file-sharing retries for atomic state publication. Verified control-state contracts, 25 bridge regressions, compilation/whitespace checks, and real isolated authenticated HTTP Core stop/start/restart with persistent Manager plus synthetic bridge stop/start. Both applications remain independent; fixture processes were closed. No real WeChat, model calls, memory edits or credentials printed. Manual unsupervised deployments retain observation without fabricated control capability.

@@ -1,6 +1,6 @@
 # Pero
 
-Windows 首次安装可双击本仓库根目录的 `install-pero.cmd`，安装后端依赖并构建控制室前端。统一依赖安装由 webot 根目录的 `install.cmd` 调用此脚本，再安装微信桥依赖；安装不会启动服务。
+Windows 首次使用按顺序运行本仓库根目录的 **`install-pero.cmd` → `start.cmd` → `login-code.cmd`**：安装、后台启动、查看访问码。登录控制室后再配置模型与 API Key。Pero 的安装和启停独立于 webot。
 
 **让对话拥有延续。**
 
@@ -316,10 +316,25 @@ Ollama、消息桥和远程插件容器分别按所需能力配置，不是启�
 
 ### 1. 安装与构建
 
+先克隆仓库（已下载则跳过）：
+
 ```powershell
 git clone https://github.com/3523509051/Pero.git
 cd Pero
+```
 
+双击仓库根目录的 **`install-pero.cmd`**，或在 PowerShell 执行：
+
+```powershell
+.\install-pero.cmd
+```
+
+脚本会创建本仓库的 `.venv`、安装后端依赖并构建控制室前端。等待成功提示后继续下一步；安装不会启动服务，失败时查看窗口中的错误。它需要已安装 Python、Node.js/npm，并需要联网下载依赖。
+
+<details>
+<summary>手动安装的等价命令（脚本安装成功后无需重复执行）</summary>
+
+```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-lock.txt
 .\.venv\Scripts\python.exe -m pip install --no-deps -e .
@@ -329,6 +344,8 @@ npm ci
 npm run build
 cd ..
 ```
+
+</details>
 
 首次运行启动脚本时，如果 `config/local.json` 不存在，会从 `config/default.json` 创建；已有配置不会被覆盖。默认配置中的外部通道与部分工具保持关闭，需要按使用场景启用；它不是当前试验服务器的配置副本。
 
@@ -342,12 +359,13 @@ cd ..
 
 脚本使用仓库内 `.venv`，同时启动 Pero 核心与控制室；确认健康后打开浏览器。核心默认地址为 `http://127.0.0.1:8765`，控制室为 `http://127.0.0.1:8766`，核心端口以运行配置为准。
 
-首次启动自动生成管理访问码，并使用当前 Windows 用户的 DPAPI 加密保存。双击 **`login-code.cmd`** 查看访问码，填入控制室登录页。再次启动复用该码，不会每次生成新的访问码。
+首次启动自动生成管理访问码，并使用当前 Windows 用户的 DPAPI 加密保存。启动成功后按下一步查看访问码；再次启动复用该码，不会每次生成新的访问码。
 
 **启动成功后可以关闭命令窗口，Pero 继续在后台运行。** 正常结束请运行本仓库的 `stop.cmd`：脚本先暂停接收新任务，等待已有对话与后台任务收尾，再关闭核心与控制室；它不停止 webot。
 
 | 脚本 | 用途 |
 | --- | --- |
+| `install-pero.cmd` | 首次安装后端依赖并构建控制室前端，不启动服务 |
 | `start.cmd` | 启动核心和控制室；重复运行时不创建第二个脚本实例 |
 | `stop.cmd` | 请求当前启动器管理的实例收尾并停止；繁忙或无法确认时不强制接管 |
 | `status.cmd` | 查看本实例的核心、控制室健康状态、配置与日志位置 |
@@ -359,11 +377,21 @@ cd ..
 .\start.cmd --config "config/local.json" --no-browser
 ```
 
-启动器会检查配置、依赖、前端构建及端口；端口被占用时报告错误，不会结束占用进程。运行日志位于 `logs/launcher/<本次运行编号>/`，管理访问码密文和控制状态默认位于 `data/launcher/`。控制室默认沿用 `data/manager/` 保存的配置和托管凭据。
+启动器会检查配置、依赖、前端构建及端口；端口被占用时报告错误，不会结束占用进程。运行日志位于 `logs/launcher/<本次运行编号>/`，运行控制状态默认位于 `data/launcher/`。管理访问码密文保存在 `data/manager/management-token.dpapi`，控制室配置和托管凭据也保存在 `data/manager/`。
 
 启动器不安装依赖、不重新构建前端，也不注册计划任务。start.cmd 只管理核心和控制室，webot 由它自己的入口独立运行；已有手动或服务部署不能由本脚本接管。更多参数及手动入口见 [本地启动说明](docs/local-launcher.md)。
 
-### 3. 完成首次配置
+### 3. 查看访问码并登录
+
+双击 Pero 根目录的 **`login-code.cmd`**，或运行：
+
+```powershell
+.\login-code.cmd
+```
+
+复制窗口显示的访问码，登录 `http://127.0.0.1:8766/`。请先完成上一步启动；若尚未生成访问码，先运行 `start.cmd`。访问码由 Pero 负责，不在 webot 中查看，也不要分享或提交到 Git。
+
+### 登录后完成首次配置
 
 进入控制室后，在“模型与 API Key”中配置模型及凭据，再按需配置 Agent、消息桥、知识库与工具。核心 `/health` 可检查存活，`/docs` 提供运行实例的接口文档。
 
@@ -373,7 +401,7 @@ cd ..
 
 Pero 的 `start.cmd` 在后台启动 Core 和控制室，`stop.cmd` 只停止 Pero。webot 也由自己的 start.cmd/stop.cmd 独立管理。首次接入前，在双方停止时运行 webot 的连接Pero.cmd 同步全部群与连接凭据；然后分别启动双方。
 
-组合安装步骤见 [webot Windows 部署指南](https://github.com/3523509051/webot/blob/main/docs/deployment-windows.md)。
+微信接入按 webot 自己的五步流程完成，见 [webot Windows 部署指南](https://github.com/3523509051/webot/blob/main/docs/deployment-windows.md)。日常使用不需要重新安装依赖，直接运行 start.cmd；完全退出 Pero 使用 stop.cmd。网页的 Pero 启停按钮只控制核心，控制室保持在线。
 
 ## 数据与配置
 
