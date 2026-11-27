@@ -1,5 +1,9 @@
 # Pre-push review — 2026-11-27
 
+## Independent installer ownership
+
+PASS. Added install-pero.cmd to the Pero root, resolving paths relative to itself and installing only this project's backend and frontend. webot owns the combined installer and calls this entry. Incomplete repository validation and delegation/failure paths were checked with isolated shell fixtures; no live services or dependencies were changed by verification.
+
 ## All-group documentation revision
 
 PASS. README and the combination redirect now describe automatic all-group startup in webot rather than its removed setup/selection step. Membership is synchronized on restart; Pero's code and independent service behavior are unchanged in this documentation-only follow-up.

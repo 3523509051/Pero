@@ -1,4 +1,5 @@
 Source publication file list (2026-11-27)
+Independent installer addition: install-pero.cmd
 Repository: Pero
 
 .env.example
