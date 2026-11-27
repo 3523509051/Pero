@@ -1,5 +1,9 @@
 # Pre-push review — 2026-11-27
 
+## Automatic service observation independent of control bindings
+
+PASS. /services now observes Core health and OneBot connection even without scheduled-task control bindings. A healthy Core or connected bridge is shown as running; loss of connection does not falsely prove a process has stopped. Existing explicitly configured control adapters are preserved. UI distinguishes automatic observation from web-control capability rather than reporting all unbound services as unknown. Verified healthy-but-model-unconfigured Core, connected bridge, unavailable/disconnected observations, no inferred control authorization, and successful TypeScript/Vite production build. This change does not add automatic web start/stop/restart.
+
 ## Cookie-session CSRF save repair
 
 PASS. Replaced the module-global cached CSRF request path with a shared HTTP client that reads the current authenticated cookie session before each mutation, excluding initial login. This covers cookie changes across tabs and missing/stale in-memory CSRF state. Read requests are unchanged; writes are never automatically retried. Authentication/CSRF server protections remain intact. Verified mocked client scenarios for per-write refresh, session change, read/login behavior and refusal to write after expired/missing session tokens. An isolated FastAPI test reproduced rejection of the stale token before its handler and acceptance of the refreshed token exactly once. TypeScript and Vite production build passed. No real API Key or vault content was read, changed or logged; no model request was sent.

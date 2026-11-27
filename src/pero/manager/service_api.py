@@ -3,17 +3,34 @@ from pero.configuration.auth import require_management
 from .services import ServiceError
 
 
+async def observed_services(operations):
+    """Runtime observations are independent of permission to control processes."""
+    try:observed=await operations.reader.status()
+    except Exception:observed={}
+    result=[]
+    for name in ('pero','bridge'):
+        if name in operations.bindings:
+            try:state=await operations.observe(name)
+            except Exception:state={'running':None,'ready':False,'state':'unknown'}
+        elif name=='pero':
+            core=observed.get('pero',{})
+            healthy=core.get('state')=='http_ready'
+            state={'running':True if healthy else None,'ready':bool(core.get('ready')),
+                   'state':'http_ready' if healthy else 'unknown','status_source':'core_health'}
+        else:
+            connected=observed.get('bridge',{}).get('connected')
+            state={'running':True if connected is True else None,'ready':connected is True,
+                   'connected':connected,'state':'connected' if connected is True else 'not_connected' if connected is False else 'unknown',
+                   'status_source':'onebot_connection'}
+        result.append({'service_id':name,'configured':name in operations.bindings,**state})
+    return result
+
+
 def service_router(operations):
     router=APIRouter(prefix='/manage/v1',dependencies=[Depends(require_management)])
     @router.get('/services')
     async def services():
-        result=[]
-        for name in ('pero','bridge'):
-            if name not in operations.bindings:result.append({'service_id':name,'configured':False,'state':'not_configured'});continue
-            try:state=await operations.observe(name)
-            except Exception:state={'running':None,'ready':False,'state':'unknown'}
-            result.append({'service_id':name,'configured':True,**state})
-        return {'items':result}
+        return {'items':await observed_services(operations)}
     @router.post('/operations',status_code=202)
     async def submit(request:Request):
         try:
