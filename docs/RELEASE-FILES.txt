@@ -1,6 +1,5 @@
-Source publication file list (2026-11-23; converged memory and SDK)
-Repository: pero
-Files: 227
+Source publication file list (2026-11-27)
+Repository: Pero
 
 .env.example
 .gitignore
@@ -40,6 +39,7 @@ docs/pre-push-review-2026-11-22-2009.md
 docs/pre-push-review-2026-11-22-2151.md
 docs/pre-push-review-2026-11-23-2200.md
 docs/pre-push-review-2026-11-23-l3-archive.md
+docs/pre-push-review-2026-11-27.md
 docs/project-engineering.md
 docs/wechat-combination.md
 example-plugin/LICENSE
@@ -82,7 +82,6 @@ requirements-lock.txt
 scripts/check_run.py
 scripts/launch_child.py
 scripts/launcher.py
-scripts/wechat_pairing.py
 scripts/windows_job.py
 src/pero/__init__.py
 src/pero/__main__.py
@@ -225,7 +224,6 @@ src/pero/tools/stickers.py
 src/pero/tools/validation.py
 src/pero/tools/web.py
 src/pero_plugin_sdk/__init__.py
-start-wechat.cmd
 start.cmd
 status.cmd
 stop.cmd
